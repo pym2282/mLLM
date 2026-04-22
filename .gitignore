@@ -1,0 +1,36 @@
+# Build outputs
+build/
+cmake-build-*/
+
+# Python virtual environment
+.venv/
+venv/
+
+# Model files (too large for git)
+models/
+
+# VSCode
+.vscode/
+
+# Visual Studio
+.vs/
+*.VC.db
+*.VC.opendb
+*.sln
+*.vcxproj*
+
+# CLion / JetBrains
+.idea/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

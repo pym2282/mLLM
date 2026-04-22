@@ -1,94 +1,43 @@
 #include <iostream>
-#include <vector>
-#include <string>
-#include <unordered_map>
+#include <memory>
 
-/*
-Mini LLM Tokenizer (C++)
-------------------------
-목표:
-- 문자열 -> Token IDs (encode)
-- Token IDs -> 문자열 (decode)
-- 실제 LLM의 입력 흐름 이해
+#include "models/llama/LlamaRunner.h"
 
-하드코딩 logits 실험은 제외하고,
-바로 tokenizer 단계부터 시작합니다.
-*/
+int main()
+{
+    std::cout << "===== mLLM Runtime Start =====" << std::endl;
 
-class MiniTokenizer {
-private:
-    std::unordered_map<std::string, int> vocab = {
-        {"1", 16},
-        {"+", 488},
-        {"=", 284},
-        {"2", 17},
-        {"hello", 1001},
-        {"world", 1002}
-    };
+    auto runner = std::make_shared<mllm::LlamaRunner>();
 
-    std::unordered_map<int, std::string> reverse_vocab = {
-        {16, "1"},
-        {488, "+"},
-        {284, "="},
-        {17, "2"},
-        {1001, "hello"},
-        {1002, "world"}
-    };
+    const std::string model_path = "../models/TinyLlama";
 
-public:
-    std::vector<int> encode(const std::vector<std::string>& words) {
-        std::vector<int> result;
-
-        for (const auto& word : words) {
-            if (vocab.find(word) != vocab.end()) {
-                result.push_back(vocab[word]);
-            }
-            else {
-                result.push_back(-1); // unknown token
-            }
-        }
-
-        return result;
+    if (!runner->Load(model_path))
+    {
+        std::cerr << "Failed to load model." << std::endl;
+        return -1;
     }
 
-    std::string decode(const std::vector<int>& ids) {
-        std::string result;
+    runner->InitKVCache(1, 512);
 
-        for (int id : ids) {
-            if (reverse_vocab.find(id) != reverse_vocab.end()) {
-                result += reverse_vocab[id] + " ";
-            }
-            else {
-                result += "[UNK] ";
-            }
-        }
+    // 테스트용 dummy input
+    // 이후 tokenizer 연결 예정
+    auto input_ids = torch::tensor({{1, 2, 3, 4}}, torch::kInt64);
+    auto attention_mask = torch::ones({1, 4}, torch::kInt64);
 
-        return result;
+    try
+    {
+        auto logits = runner->Forward(input_ids, attention_mask);
+
+        std::cout << "Forward success!" << std::endl;
+        std::cout << "Logits shape: " << logits.sizes() << std::endl;
     }
-};
-
-int main() {
-    MiniTokenizer tokenizer;
-
-    std::vector<std::string> input = {"1", "+", "1", "="};
-
-    std::cout << "Input Text:\n";
-    for (const auto& word : input) {
-        std::cout << word << " ";
+    catch (const std::exception& e)
+    {
+        std::cerr << "Forward failed:\n" << e.what() << std::endl;
+        return -1;
     }
 
-    std::cout << "\n\n=== Encode ===\n";
-    std::vector<int> tokenIds = tokenizer.encode(input);
-
-    for (int id : tokenIds) {
-        std::cout << id << " ";
-    }
-
-    std::cout << "\n\n=== Decode ===\n";
-    std::cout << tokenizer.decode(tokenIds) << "\n";
-
-    std::cout << "\n핵심:\n";
-    std::cout << "모델은 문자열이 아니라 Token IDs를 입력으로 받습니다.\n";
+    std::cout << "===== mLLM Runtime End =====" << std::endl;
 
     return 0;
 }

@@ -15,6 +15,10 @@ namespace mllm
         int num_key_value_heads = 0;
         int vocab_size = 0;
         int max_position_embeddings = 0;
+        int intermediate_size = 0;
+        int head_dim = 0;
+        float rms_norm_eps = 1e-5f;
+        float rope_theta = 10000.0f;
     };
 
     class IModelRunner

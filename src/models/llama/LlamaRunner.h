@@ -1,7 +1,12 @@
 #pragma once
 
 #include "models/base/IModelRunner.h"
-#include <torch/script.h>
+#include "models/base/SafeTensorHeaderParser.h"
+
+#include <torch/torch.h>
+
+#include <string>
+#include <unordered_map>
 
 namespace mllm
 {
@@ -26,15 +31,29 @@ namespace mllm
     private:
         bool LoadConfig(const std::string& config_path);
 
+        // Read tensor from model.safetensors using cached metadata map and
+        // insert it into weights_. Throws on failure.
+        torch::Tensor& LoadWeight(const std::string& name);
+
+        // Bulk load all RMSNorm weights for this architecture:
+        //   model.embed_tokens.weight
+        //   model.norm.weight
+        //   model.layers.{i}.input_layernorm.weight
+        //   model.layers.{i}.post_attention_layernorm.weight
+        void LoadEmbeddingAndNormWeights();
+
     private:
         ModelConfig config_;
 
-        // 초기 단계에서는 TorchScript module 사용
-        // 이후 safetensors 직접 로딩으로 확장 예정
-        torch::jit::script::Module module_;
+        std::string model_path_;
+
+        // safetensors header metadata (offsets, shapes, dtypes) kept for
+        // on-demand weight loading in future steps.
+        std::unordered_map<std::string, TensorMeta> tensor_map_;
+
+        // Loaded weight storage, keyed by safetensors tensor name.
+        std::unordered_map<std::string, torch::Tensor> weights_;
 
         bool is_loaded_ = false;
-
-        torch::Tensor embedding_weight_;
     };
 }

@@ -34,6 +34,8 @@ namespace mllm
             out_config.max_position_embeddings = j.value("max_position_embeddings", 0);
             out_config.intermediate_size = j.value("intermediate_size", 0);
             out_config.rms_norm_eps = j.value("rms_norm_eps", 1e-5f);
+            out_config.tie_word_embeddings =
+                j.value("tie_word_embeddings", false);
 
             // head_dim: explicit if present, else hidden_size / num_attention_heads
             if (j.contains("head_dim"))
@@ -70,6 +72,9 @@ namespace mllm
             std::cout << "  vocab_size: " << out_config.vocab_size << std::endl;
             std::cout << "  rms_norm_eps: " << out_config.rms_norm_eps << std::endl;
             std::cout << "  rope_theta: " << out_config.rope_theta << std::endl;
+            std::cout << "  tie_word_embeddings: "
+                      << (out_config.tie_word_embeddings ? "true" : "false")
+                      << std::endl;
 
             return true;
         }

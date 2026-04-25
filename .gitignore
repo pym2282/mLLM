@@ -28,8 +28,9 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Logs
+# Logs / crash dumps
 *.log
+*.stackdump
 
 # OS files
 .DS_Store

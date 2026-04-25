@@ -19,6 +19,7 @@ namespace mllm
         int head_dim = 0;
         float rms_norm_eps = 1e-5f;
         float rope_theta = 10000.0f;
+        bool tie_word_embeddings = false;
     };
 
     class IModelRunner

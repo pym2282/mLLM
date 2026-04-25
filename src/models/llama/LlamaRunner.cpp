@@ -10,6 +10,8 @@
 
 #include "core/runtime/EmbeddingLookup.h"
 #include "core/runtime/RMSNorm.h"
+#include "core/runtime/Linear.h"
+#include "core/runtime/TransformerBlock.h"
 
 namespace mllm
 {
@@ -43,12 +45,13 @@ namespace mllm
                 return false;
             }
 
-            LoadEmbeddingAndNormWeights();
+            LoadAllWeights();
 
             is_loaded_ = true;
 
             std::cout << "[LlamaRunner] Model loaded: " << model_path
-                      << "  weights=" << weights_.size() << std::endl;
+                      << "  weights=" << weights_.size()
+                      << "  layers=" << layer_weights_.size() << std::endl;
             return true;
         }
         catch (const std::exception& e)
@@ -75,21 +78,59 @@ namespace mllm
         return it->second;
     }
 
-    void LlamaRunner::LoadEmbeddingAndNormWeights()
+    void LlamaRunner::LoadAllWeights()
     {
+        // Global
         LoadWeight("model.embed_tokens.weight");
         LoadWeight("model.norm.weight");
 
-        for (int i = 0; i < config_.num_layers; ++i)
+        if (!config_.tie_word_embeddings)
         {
-            const std::string prefix = "model.layers." + std::to_string(i);
-            LoadWeight(prefix + ".input_layernorm.weight");
-            LoadWeight(prefix + ".post_attention_layernorm.weight");
+            LoadWeight("lm_head.weight");
         }
 
-        std::cout << "[LlamaRunner] Loaded embedding + "
-                  << (1 + 2 * config_.num_layers)
-                  << " RMSNorm weights" << std::endl;
+        // Per-layer
+        layer_weights_.clear();
+        layer_weights_.reserve(config_.num_layers);
+
+        for (int i = 0; i < config_.num_layers; ++i)
+        {
+            const std::string p = "model.layers." + std::to_string(i);
+
+            LayerWeights lw;
+            lw.input_layernorm =
+                LoadWeight(p + ".input_layernorm.weight");
+            lw.post_attention_layernorm =
+                LoadWeight(p + ".post_attention_layernorm.weight");
+
+            lw.w_q = LoadWeight(p + ".self_attn.q_proj.weight");
+            lw.w_k = LoadWeight(p + ".self_attn.k_proj.weight");
+            lw.w_v = LoadWeight(p + ".self_attn.v_proj.weight");
+            lw.w_o = LoadWeight(p + ".self_attn.o_proj.weight");
+
+            lw.w_gate = LoadWeight(p + ".mlp.gate_proj.weight");
+            lw.w_up   = LoadWeight(p + ".mlp.up_proj.weight");
+            lw.w_down = LoadWeight(p + ".mlp.down_proj.weight");
+
+            layer_weights_.push_back(std::move(lw));
+        }
+
+        const size_t expected = 2
+            + (config_.tie_word_embeddings ? 0 : 1)
+            + static_cast<size_t>(config_.num_layers) * 9;
+
+        std::cout << "[LlamaRunner] Loaded all weights: "
+                  << weights_.size() << " tensors"
+                  << " (per-layer views=" << layer_weights_.size()
+                  << ", expected=" << expected << ")"
+                  << std::endl;
+
+        if (weights_.size() != expected)
+        {
+            std::cerr << "[LlamaRunner] WEIGHT COUNT MISMATCH — "
+                      << "expected " << expected
+                      << ", got " << weights_.size() << std::endl;
+        }
     }
 
     torch::Tensor LlamaRunner::Forward(
@@ -101,47 +142,66 @@ namespace mllm
             throw std::runtime_error("Model is not loaded.");
         }
 
-        std::cout << "[LlamaRunner] Forward started" << std::endl;
+        const auto S = input_ids.size(1);
 
-        // Step 1: token ids -> embedding vectors
-        auto hidden_states = EmbeddingLookup::Forward(
+        std::cout << "[LlamaRunner] Forward started"
+                  << "  input_ids shape=" << input_ids.sizes() << std::endl;
+
+        // Positions for prefill: [0, 1, ..., S-1]. Shared across batch.
+        // When KV cache lands, decode step will override this to [cache_len].
+        auto position_ids = torch::arange(
+            0, S,
+            torch::TensorOptions()
+                .dtype(torch::kInt64)
+                .device(input_ids.device()));
+
+        // Step 1: embedding lookup
+        auto hidden = EmbeddingLookup::Forward(
             input_ids,
-            weights_.at("model.embed_tokens.weight")
-        );
+            weights_.at("model.embed_tokens.weight"));
 
-        // Step 2: Layer 0 input_layernorm ONLY.
-        // Chaining 44 norms without Attention/MLP between them is numerically
-        // meaningless — we expose exactly one norm so it can be verified
-        // 1:1 against HF Python before building out the rest of the block.
-        auto& layer0_pre_norm_w =
-            weights_.at("model.layers.0.input_layernorm.weight");
-        hidden_states = RMSNorm::Forward(
-            hidden_states, layer0_pre_norm_w, config_.rms_norm_eps);
-
-        std::cout << "[LlamaRunner] Layer0 input_layernorm output shape: "
-                  << hidden_states.sizes()
-                  << "  dtype=" << hidden_states.scalar_type()
-                  << std::endl;
-
-        // Probe values for HF parity check (first 5 elems of token 0).
+        // Step 2: N transformer blocks
+        for (int i = 0; i < config_.num_layers; ++i)
         {
-            auto probe = hidden_states.index({0, 0}).to(torch::kFloat32)
-                                      .slice(0, 0, 5);
-            std::cout << "[LlamaRunner] probe hidden[0,0,0:5]: "
-                      << probe << std::endl;
+            hidden = TransformerBlock::Forward(
+                hidden,
+                layer_weights_[i],
+                config_.num_attention_heads,
+                config_.num_key_value_heads,
+                config_.head_dim,
+                static_cast<double>(config_.rope_theta),
+                static_cast<double>(config_.rms_norm_eps),
+                position_ids);
         }
 
-        // Step 4: LM Head — still placeholder (needs lm_head.weight matmul).
-        auto logits = torch::zeros(
-            {
-                input_ids.size(0),
-                input_ids.size(1),
-                config_.vocab_size
-            },
-            torch::kFloat32
-        );
+        // Step 3: final RMSNorm
+        hidden = RMSNorm::Forward(
+            hidden,
+            weights_.at("model.norm.weight"),
+            config_.rms_norm_eps);
 
-        std::cout << "[LlamaRunner] Forward step complete" << std::endl;
+        // Step 4: LM head → logits
+        const torch::Tensor& lm_head_w = config_.tie_word_embeddings
+            ? weights_.at("model.embed_tokens.weight")
+            : weights_.at("lm_head.weight");
+
+        auto logits = Linear::Forward(hidden, lm_head_w);
+
+        std::cout << "[LlamaRunner] Forward step complete"
+                  << "  logits shape=" << logits.sizes()
+                  << "  dtype=" << logits.scalar_type() << std::endl;
+
+        // Probe last-token logits — show first 5 values + argmax.
+        {
+            auto last = logits.index({0, S - 1}).to(torch::kFloat32);
+            auto head5 = last.slice(0, 0, 5);
+            auto top = torch::argmax(last).item<int64_t>();
+            std::cout << "[LlamaRunner] logits[0,-1,:5]: " << head5
+                      << std::endl;
+            std::cout << "[LlamaRunner] last-token argmax token_id=" << top
+                      << std::endl;
+        }
+
         return logits;
     }
 

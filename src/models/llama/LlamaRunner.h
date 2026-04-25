@@ -2,11 +2,13 @@
 
 #include "models/base/IModelRunner.h"
 #include "models/base/SafeTensorHeaderParser.h"
+#include "core/runtime/TransformerBlock.h"
 
 #include <torch/torch.h>
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace mllm
 {
@@ -31,28 +33,35 @@ namespace mllm
     private:
         bool LoadConfig(const std::string& config_path);
 
-        // Read tensor from model.safetensors using cached metadata map and
-        // insert it into weights_. Throws on failure.
+        // Read tensor from model.safetensors using cached metadata and cache
+        // the handle in weights_. Throws on failure. Returns a reference to
+        // the cached tensor so it can be stored in a LayerWeights view.
         torch::Tensor& LoadWeight(const std::string& name);
 
-        // Bulk load all RMSNorm weights for this architecture:
+        // Load every weight needed by Forward:
         //   model.embed_tokens.weight
         //   model.norm.weight
-        //   model.layers.{i}.input_layernorm.weight
-        //   model.layers.{i}.post_attention_layernorm.weight
-        void LoadEmbeddingAndNormWeights();
+        //   lm_head.weight              (skipped if tie_word_embeddings)
+        //   per layer:
+        //     input_layernorm, post_attention_layernorm
+        //     self_attn.{q,k,v,o}_proj
+        //     mlp.{gate,up,down}_proj
+        // Also populates layer_weights_ with tensor views per layer.
+        void LoadAllWeights();
 
     private:
         ModelConfig config_;
 
         std::string model_path_;
 
-        // safetensors header metadata (offsets, shapes, dtypes) kept for
-        // on-demand weight loading in future steps.
+        // safetensors header metadata (offsets, shapes, dtypes).
         std::unordered_map<std::string, TensorMeta> tensor_map_;
 
-        // Loaded weight storage, keyed by safetensors tensor name.
+        // Owning storage for every loaded tensor, keyed by HF tensor name.
         std::unordered_map<std::string, torch::Tensor> weights_;
+
+        // Per-layer tensor views into weights_. Size = config_.num_layers.
+        std::vector<LayerWeights> layer_weights_;
 
         bool is_loaded_ = false;
     };

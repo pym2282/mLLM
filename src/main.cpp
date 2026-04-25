@@ -21,7 +21,7 @@ int main()
 
     // 테스트용 dummy input
     // 이후 tokenizer 연결 예정
-    auto input_ids = torch::tensor({{1, 2, 3, 4}}, torch::kInt64);
+    auto input_ids = torch::tensor({{15043, 6796, 263, 1243}}, torch::kInt64);
     auto attention_mask = torch::ones({1, 4}, torch::kInt64);
 
     try

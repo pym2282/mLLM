@@ -1,3 +1,5 @@
+// src/models/base/GenerateOptions.h
+
 #pragma once
 
 namespace mllm
@@ -10,11 +12,16 @@ namespace mllm
 
         int top_k = 40;
 
+        // NEW
+        // nucleus sampling
+        // usually 0.8 ~ 0.95
+        // 1.0 = disabled
+        float top_p = 0.9f;
+
         bool use_greedy = false;
 
-        // repetition penalty
-        // 1.0 = disabled
-        // 1.05 ~ 1.2 추천
         float repetition_penalty = 1.1f;
+
+        int64_t eos_token_id = 2;
     };
 }

@@ -249,26 +249,48 @@ namespace mllm
         // 최종 생성된 token만 저장
         std::vector<int64_t> generated;
 
+        if (!is_loaded_)
+        {
+            throw std::runtime_error(
+                "Model is not loaded."
+            );
+        }
+
+        // --------------------------------
+        // KV Cache 초기화
+        // 새로운 generation 시작 시 reset
+        // --------------------------------
+
         for (auto& cache : kv_caches_)
         {
             cache.Clear();
         }
 
         // generation 중 계속 확장될 입력
-        std::vector<int64_t> current_input_ids = input_ids;
+        std::vector<int64_t> current_input_ids =
+            input_ids;
 
-        for (int step = 0; step < options.max_new_tokens; ++step)
+        for (
+            int step = 0;
+            step < options.max_new_tokens;
+            ++step
+        )
         {
             // --------------------------------
             // Prefill / Decode split
+            //
+            // step == 0:
+            //     full prompt
+            //
+            // step >= 1:
+            //     only last token
             // --------------------------------
 
             torch::Tensor input_tensor;
 
             if (step == 0)
             {
-                // Prefill:
-                // 전체 prompt를 한 번 계산
+                // prefill
                 input_tensor =
                     torch::tensor(
                         current_input_ids,
@@ -278,11 +300,10 @@ namespace mllm
             }
             else
             {
-                // Decode:
-                // 마지막 생성 token 1개만 넣기
+                // decode
                 input_tensor =
                     torch::tensor(
-                        {
+                        std::vector<int64_t>{
                             current_input_ids.back()
                         },
                         torch::TensorOptions()
@@ -290,7 +311,12 @@ namespace mllm
                     ).unsqueeze(0); // [1, 1]
             }
 
+            // --------------------------------
             // attention mask
+            // prefill: [1, seq_len]
+            // decode : [1, 1]
+            // --------------------------------
+
             auto attention_mask =
                 torch::ones(
                     {
@@ -301,7 +327,10 @@ namespace mllm
                         .dtype(torch::kInt64)
                 );
 
+            // --------------------------------
             // Forward
+            // --------------------------------
+
             auto logits =
                 Forward(
                     input_tensor,
@@ -315,12 +344,16 @@ namespace mllm
                     logits.size(1) - 1
                 });
 
-            // sampling
+            // --------------------------------
+            // Sampling
+            // --------------------------------
+
             int64_t next_token =
                 Sampler::Sample(
                     last_logits,
                     options.temperature,
                     options.top_k,
+                    options.top_p,
                     options.use_greedy,
                     current_input_ids,
                     options.repetition_penalty
@@ -331,22 +364,31 @@ namespace mllm
                 << next_token
                 << std::endl;
 
+            // --------------------------------
             // 생성 결과 저장
-            generated.push_back(next_token);
+            // (streaming decode 제거)
+            // --------------------------------
+
+            generated.push_back(
+                next_token
+            );
 
             // 다음 step 입력에 추가
-            current_input_ids.push_back(next_token);
+            current_input_ids.push_back(
+                next_token
+            );
 
             // --------------------------------
             // EOS STOP
             // --------------------------------
 
-            constexpr int64_t EOS_TOKEN_ID = 2;
-
-            if (next_token == EOS_TOKEN_ID)
+            if (
+                next_token ==
+                options.eos_token_id
+            )
             {
                 std::cout
-                    << "[LlamaRunner] EOS token detected. Stop generation."
+                    << "[LlamaRunner] EOS detected. Stop generation."
                     << std::endl;
 
                 break;
@@ -355,6 +397,165 @@ namespace mllm
 
         return generated;
     }
+    std::vector<int64_t> mllm::LlamaRunner::GenerateStreaming(
+        const std::vector<int64_t>& input_ids,
+        const GenerateOptions& options,
+        ITokenizer* tokenizer)
+    {
+        if (!is_loaded_)
+        {
+            throw std::runtime_error(
+                "Model is not loaded."
+            );
+        }
+
+        if (tokenizer == nullptr)
+        {
+            throw std::runtime_error(
+                "Tokenizer is null."
+            );
+        }
+
+        std::vector<int64_t> generated;
+
+        // 전체 prompt 저장
+        std::vector<int64_t> current_input_ids =
+            input_ids;
+
+        // --------------------------------
+        // KV Cache reset
+        // 새로운 generation 시작 시 초기화
+        // --------------------------------
+
+        for (auto& cache : kv_caches_)
+        {
+            cache.Clear();
+        }
+
+        for (
+            int step = 0;
+            step < options.max_new_tokens;
+            ++step
+        )
+        {
+            // --------------------------------
+            // Prefill / Decode split
+            //
+            // step == 0:
+            //     full prompt
+            //
+            // step >= 1:
+            //     only last token
+            // --------------------------------
+
+            torch::Tensor input_tensor;
+
+            if (step == 0)
+            {
+                // prefill
+                input_tensor =
+                    torch::tensor(
+                        current_input_ids,
+                        torch::TensorOptions()
+                            .dtype(torch::kInt64)
+                    ).unsqueeze(0);
+            }
+            else
+            {
+                // decode
+                input_tensor =
+                    torch::tensor(
+                        std::vector<int64_t>{
+                            current_input_ids.back()
+                        },
+                        torch::TensorOptions()
+                            .dtype(torch::kInt64)
+                    ).unsqueeze(0);
+            }
+
+            auto logits =
+                Forward(
+                    input_tensor,
+                    {}
+                );
+
+            auto last_logits =
+                logits.index({
+                    0,
+                    logits.size(1) - 1
+                });
+
+            int64_t next_token =
+                Sampler::Sample(
+                    last_logits,
+                    options.temperature,
+                    options.top_k,
+                    options.top_p,
+                    options.use_greedy,
+                    current_input_ids,
+                    options.repetition_penalty
+                );
+
+            std::cout
+                << "[LlamaRunner] last-token argmax token_id="
+                << next_token
+                << std::endl;
+
+            // --------------------------------
+            // generated token 저장
+            // --------------------------------
+
+            generated.push_back(
+                next_token
+            );
+
+            // --------------------------------
+            // native streaming output
+            // token 1개 즉시 decode + 출력
+            // --------------------------------
+
+            std::string piece =
+                tokenizer->Decode(
+                    std::vector<int64_t>{
+                        next_token
+                    }
+                );
+
+            std::cout
+                << piece
+                << std::flush;
+
+            // --------------------------------
+            // 다음 step 입력에 추가
+            // --------------------------------
+
+            current_input_ids.push_back(
+                next_token
+            );
+
+            // --------------------------------
+            // EOS stop
+            // --------------------------------
+
+            if (
+                next_token ==
+                options.eos_token_id
+            )
+            {
+                std::cout
+                    << "\n[LlamaRunner] EOS detected. Stop generation."
+                    << std::endl;
+
+                break;
+            }
+        }
+
+        std::cout
+            << std::endl;
+
+        return generated;
+    }
+
     void LlamaRunner::InitKVCache(int batch_size, int max_seq_len)
     {
         // TODO: real KV cache manager.

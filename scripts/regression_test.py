@@ -15,19 +15,24 @@ def run_cpp():
     # regression_test.py 기준으로 프로젝트 루트 계산
     # scripts/regression_test.py -> parent.parent = mLLM/
     project_root = Path(__file__).resolve().parent.parent
-    build_dir = project_root / "cmake-build-debug"
+    build_dir = project_root / "cmake-build-release"
 
-    exe_path = build_dir / "mLLM.exe"
+    exe_path = build_dir / "Release" / "mLLM.exe"
+
+    if not exe_path.exists():
+        # CLion release layout fallback
+        exe_path = build_dir / "mLLM.exe"
 
     if not exe_path.exists():
         raise RuntimeError(
-            f"Executable not found: {exe_path}"
+            f"Executable not found: {exe_path}\n"
+            f"Build with: cmake --build cmake-build-release --config Release"
         )
 
     # 반드시 build 폴더에서 실행해야
     # ../models/TinyLlama 경로가 정상 동작함
     result = subprocess.run(
-        [str(exe_path)],
+        [str(exe_path), "--parity"],
         capture_output=True,
         text=True,
         cwd=str(build_dir)

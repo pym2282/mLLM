@@ -1,212 +1,301 @@
 # mLLM
 
-미니 vLLM 스타일의 C++ LLM 추론 런타임입니다.
-HuggingFace의 safetensors / config.json을 **ONNX / TorchScript 없이 직접 로드**하여 forward 및 generation을 수행합니다.
+미니 vLLM 스타일의 C++ LLM 추론 런타임.
 
-* **Stack:** C++17, CMake, LibTorch, nlohmann/json
-* **Target Platform:** Windows / MSVC / CLion
-* **Reference Model:** TinyLlama (22 layers, 2048 hidden, 32/4 GQA, BF16)
-* **Expansion Target:** Qwen, Mistral
+HuggingFace의 `config.json` + `model.safetensors`를
+**ONNX / TorchScript 없이 직접 로드**하여
+forward / generation / KV cache decode를 수행합니다.
 
-> ONNX / TorchScript 경로는 폐기했습니다.
-> transformers DynamicCache export 불안정 문제로 인해 safetensors 직접 로드 방식만 유지합니다.
+이 프로젝트의 목표는 단순 inference demo가 아니라,
+
+# "mini-vLLM / mini-llama.cpp 수준의 standalone runtime"
+
+입니다.
+
+즉:
+
+* safetensors 직접 로드
+* full transformer forward
+* sampler
+* KV cache
+* prefill / decode split
+* tokenizer abstraction
+* native tokenizer
+* continuous batching
+* scheduler
+* OpenAI-compatible serving
+
+까지를 단계적으로 구현합니다.
 
 ---
 
-# 현재 상태
+# 현재 프로젝트 상태 (중요)
 
-## Inference Engine MVP 완료
+## 현재는 어디까지 왔는가
 
-프로젝트는 이제 단순 모델 로더가 아니라
-실제로 텍스트 생성이 가능한 로컬 추론 엔진 단계까지 도달했습니다.
+현재는
 
-구현 완료:
+# Core Runtime은 거의 완료
 
-* Config / safetensors 로딩
-* BF16 / F16 / F32 tensor 디코딩
-* Embedding Lookup
+상태입니다.
+
+즉:
+
+* full forward parity 완료
+* generation loop 완료
+* KV cache decode 완료
+* prefill / decode split 완료
+* tokenizer abstraction 완료
+
+까지 끝났습니다.
+
+이제 남은 것은
+
+# tokenizer parity + serving layer
+
+입니다.
+
+즉 프로젝트는
+
+# "LLM 구현 중"
+
+이 아니라
+
+# "mini-vLLM finishing stage"
+
+입니다.
+
+---
+
+# 기술 스택
+
+## Core
+
+* C++17
+* CMake
+* LibTorch
+* nlohmann/json
+
+## Platform
+
+* Windows
+* MSVC
+* CLion
+
+## Reference Model
+
+### TinyLlama
+
+* 22 layers
+* hidden size: 2048
+* attention heads: 32
+* KV heads: 4 (GQA)
+* BF16
+
+## Expansion Target
+
+향후 지원 예정:
+
+* Qwen
+* Mistral
+* Gemma
+
+---
+
+# 중요한 설계 원칙 (매우 중요)
+
+## 1. Stateless Runtime
+
+위치:
+
+```text
+src/core/runtime/*
+```
+
+여기는
+
+# 상태 없는 pure function
+
+만 존재합니다.
+
+예:
+
+* Attention
 * RMSNorm
-* Attention (GQA + RoPE + causal mask)
-* MLP (SwiGLU)
-* TransformerBlock
-* Full 22-layer forward parity
-* Regression Test 자동화
-* Sampler (greedy / temperature / top-k)
-* EOS stop
-* Multi-token generation loop
-* Python tokenizer bridge
-* Text input → token ids → generation → decode → text output
+* Sampler
+* MLP
+* RoPE
 
-즉,
-
-```text
-prompt 입력
-→ tokenize
-→ forward
-→ sampler
-→ next token 생성
-→ decode
-→ text output
-```
-
-까지 정상 동작합니다.
-
-이제 프로젝트는
-
-```text
-loader prototype
-→ inference engine MVP
-```
-
-단계로 올라왔습니다.
+모델별 구현과 완전히 분리합니다.
 
 ---
 
-# 주요 업그레이드: KV Cache
+## 2. Model-specific Logic 분리
 
-## 왜 KV Cache가 중요한가
-
-기존 방식은 매 토큰 생성마다
-전체 prompt를 처음부터 다시 forward 했습니다.
-
-예:
+위치:
 
 ```text
-hello
-→ token1
-
-hello + token1
-→ token2
-
-hello + token1 + token2
-→ token3
+src/models/llama/
 ```
 
-즉,
+여기는
 
-```text
-매 step마다 전체 sequence 재계산
-```
+# TinyLlama 전용 구현
 
-이라 매우 느립니다.
+만 존재합니다.
+
+즉:
+
+* weight loading
+* layer registry
+* generation loop
+* model-specific config
+
+향후
+
+* QwenRunner
+* MistralRunner
+
+추가 시 runtime 재사용이 가능해야 합니다.
 
 ---
 
-## KV Cache란
+## 3. Tokenizer Abstraction
 
-Attention의 이전 K / V tensor를 저장하고
-다음 step에서 재사용하는 방식입니다.
-
-이로 인해:
-
-* generation 속도 향상
-* decode-only inference 가능
-* 실제 LLM runtime 구조 구현
-* continuous batching 기반 마련
-
-이 가능해집니다.
-
-즉,
+위치:
 
 ```text
-장난감 inference
-→ 실제 inference engine
+src/tokenizer/
 ```
 
-로 넘어가는 핵심 단계입니다.
+구조:
+
+```cpp
+ITokenizer
+↓
+LlamaTokenizer
+```
+
+현재는:
+
+* native decode (partial)
+* native encode (MVP)
+* 일부 Python bridge 유지
+
+최종 목표는:
+
+# Python tokenizer 완전 제거
+
+입니다.
+
+즉:
+
+```text
+모델만 있으면 실행
+```
+
+이 목표입니다.
 
 ---
 
-# KV Cache 구현 완료
+## 4. Weight Registry Pattern
 
-## 추가된 것
+구조:
 
-* `KVCache` struct
-* layer별 cache storage
-* Attention 내부 cache append + reuse
-* TransformerBlock cache propagation
-* LlamaRunner layer-wise cache ownership
-* Prefill / Decode split
-* decode용 position_ids 처리
+```cpp
+unordered_map<string, Tensor>
+```
+
+원칙:
+
+# HF tensor naming 그대로 유지
+
+즉:
+
+```text
+safetensors key == internal key
+```
+
+rename / remap 하지 않습니다.
 
 ---
 
-## Prefill + Decode 분리
+## 5. Regression First
 
-이제 generation은 다음처럼 동작합니다.
+가장 중요한 규칙입니다.
 
-### Step 1: Prefill
+코드 수정 후 반드시:
 
-처음 한 번만
-전체 prompt를 계산합니다.
-
-```text
-full prompt forward
+```bash
+python scripts/regression_test.py
 ```
+
+를 실행합니다.
+
+PASS가 뜨지 않으면
+
+# 다음 작업 금지
+
+입니다.
 
 ---
 
-### Step 2+: Decode
+# 현재 구현 완료 상태
 
-이후에는
-새 token 1개만 계산합니다.
+## Core Runtime
 
-```text
-last token only
-```
-
-즉,
-
-```text
-[1, 31, vocab]
-→ 매번 전체 계산
-```
-
-에서
-
-```text
-[1, 1, vocab]
-→ incremental decode
-```
-
-로 바뀌었습니다.
-
-이제 KV Cache가 실제로 속도 개선을 만들기 시작합니다.
+| 영역                                             | 상태 |
+| ---------------------------------------------- | -- |
+| Config / safetensors 로딩                        | 완료 |
+| BF16 / F16 / F32 tensor 디코딩                    | 완료 |
+| Embedding / RMSNorm                            | 완료 |
+| Attention (GQA + RoPE + causal)                | 완료 |
+| MLP (SwiGLU)                                   | 완료 |
+| Transformer Block                              | 완료 |
+| Full 22-layer forward parity                   | 완료 |
+| Regression Test 자동화                            | 완료 |
+| Sampler (greedy / temperature / top-k / top-p) | 완료 |
+| Repetition penalty                             | 완료 |
+| Multi-token generation loop                    | 완료 |
+| KV cache                                       | 완료 |
+| Prefill / Decode split                         | 완료 |
+| Persistent Chat History                        | 완료 |
+| Sliding Window                                 | 완료 |
+| Interactive CLI                                | 완료 |
 
 ---
 
-# 출력 품질 개선
+## Tokenizer
 
-## Repetition Penalty
+| 영역                         | 상태 |
+| -------------------------- | -- |
+| ITokenizer abstraction     | 완료 |
+| BpeTokenizer (공통 BPE 엔진)  | 완료 |
+| LlamaTokenizer (Metaspace) | 완료 |
+| tokenizer.json load        | 완료 |
+| vocab / special token parse | 완료 |
+| BOS / EOS handling         | 완료 |
+| Native Encode (full BPE)   | 완료 |
+| BPE merge rules            | 완료 |
+| byte fallback              | 완료 |
+| unicode handling           | 완료 |
+| Full HF parity             | 완료 |
+| Native Decode              | 완료 |
 
-반복 생성 방지를 위해
-repetition penalty를 추가했습니다.
+HF parity 검증 완료 (`tokenizer_parity_test.py` PASS).
 
-예:
+---
 
-기존:
+## Serving Layer
 
-```text
-hello hello hello hello
-```
-
-개선 후:
-
-```text
-hello world ...
-```
-
-현재 Sampler 지원:
-
-* greedy
-* temperature
-* top-k
-* repetition penalty
-
-예정:
-
-* top-p (nucleus sampling)
-* streaming output
+| 영역                    | 상태      |
+| --------------------- | ------- |
+| Streaming output      | 임시 비활성화 |
+| Request abstraction   | 완료      |
+| Request Queue         | 완료      |
+| Scheduler (sequential)| 완료      |
+| Continuous batching   | 예정      |
+| OpenAI-compatible API | 예정      |
 
 ---
 
@@ -227,42 +316,60 @@ PASS: forward parity verified
 * HF logits parity 통과
 * argmax 일치
 * multi-token generation 정상 동작
+* KV cache 기반 decode 정상 동작
 
 현재는 단순 forward 테스트가 아니라
-실제 generation 단계까지 검증되었습니다.
+실제 generation 단계까지 정상 동작합니다.
 
 ---
 
-# 현재 가능한 것
+# 현재 가능한 실행 흐름
 
 ## Example Flow
 
 ```text
-text input
-→ tokenizer
-→ generation
-→ decode
-→ output
+User text input
+→ tokenizer encode
+→ full prefill
+→ decode loop (KV cache)
+→ sampler
+→ next token 선택
+→ EOS 종료
+→ decode output
 ```
 
 예시:
 
 ```text
-Model output:
-I'm excited to share a quick and easy homemade vegan alternative...
+Input:
+hello
+
+Output:
+Hello! How can I help you today?
 ```
 
-즉,
-Tokenizer를 포함한 실제 로컬 챗봇의 핵심 흐름이 완성되었습니다.
+주의:
+
+현재 streaming output은
+성능상 이유로 임시 비활성화했습니다.
+
+개발 단계에서는
+
+```text
+Generate()
+→ 마지막에 한 번 decode
+```
+
+방식을 유지합니다.
 
 ---
 
-# 프로젝트 구조
+# 현재 프로젝트 구조
 
 ```text
 src/
 ├── main.cpp
-│   └── interactive CLI entry
+│   └── interactive CLI runtime
 │
 ├── core/runtime/
 │   ├── EmbeddingLookup.h
@@ -271,10 +378,17 @@ src/
 │   ├── RoPE.h
 │   ├── MLP.h
 │   ├── Attention.h
-│   ├── KVCache.h
 │   ├── TransformerBlock.h
 │   ├── Sampler.h
-│   └── Sampler.cpp
+│   ├── Sampler.cpp
+│   └── KVCache.h
+│
+├── tokenizer/
+│   ├── ITokenizer.h
+│   ├── LlamaTokenizer.h
+│   ├── LlamaTokenizer.cpp
+│   ├── TokenizerJsonLoader.h
+│   └── TokenizerJsonLoader.cpp
 │
 ├── models/
 │   ├── base/
@@ -288,6 +402,12 @@ src/
 │       ├── LlamaRunner.h
 │       └── LlamaRunner.cpp
 │
+├── serving/
+│   ├── GenerationRequest.h
+│   ├── RequestQueue.h
+│   ├── Scheduler.h
+│   └── Scheduler.cpp
+│
 └── scripts/
     ├── verify_full_forward.py
     └── regression_test.py
@@ -295,117 +415,92 @@ src/
 
 ---
 
-# 중요한 설계 원칙
+# 다음 작업 (AI가 이어서 해야 할 작업)
 
-## 1. Stateless Runtime
+## 최우선 작업
 
-`core/runtime/*`
+# Request abstraction + Request Queue
 
-→ 상태 없는 pure function 유지
-
-예:
-
-* Attention
-* RMSNorm
-* Sampler
-
-모델별 구현과 완전히 분리합니다.
-
----
-
-## 2. Model-specific Logic 분리
-
-`models/llama/`
-
-→ TinyLlama 전용 로직만 존재
-
-향후 Qwen / Mistral 추가 시
-runtime 재사용 가능하도록 설계했습니다.
-
----
-
-## 3. Weight Registry Pattern
-
-```cpp
-unordered_map<string, Tensor>
-```
-
-HF naming 그대로 유지합니다.
-
-safetensors key = internal key
-
-rename / remap 하지 않습니다.
-
----
-
-## 4. Regression First
-
-코드 수정 후 반드시:
-
-```bash
-python scripts/regression_test.py
-```
-
-PASS가 뜨지 않으면
-다음 작업을 진행하지 않습니다.
-
-이 프로젝트의 가장 중요한 개발 규칙입니다.
-
----
-
-# 실행 방법
-
-## Build
-
-```powershell
-cmake --build cmake-build-debug
-```
-
----
-
-## Regression Test
-
-```bash
-python scripts/regression_test.py
-```
-
-정상 결과:
+즉:
 
 ```text
-PASS: forward parity verified
+single blocking Generate()
 ```
 
----
-
-## Direct Runtime Run
-
-```powershell
-cd cmake-build-debug
-.\mLLM.exe
-```
-
----
-
-# 다음 단계
-
-우선순위:
+에서
 
 ```text
-Top-p
-↓
-Streaming output
-↓
-Persistent chat history
-↓
-Continuous batching
-↓
-Scheduler / batching
-↓
-OpenAI-compatible API
+request 생성
+→ queue 저장
+→ scheduler가 처리
 ```
 
-주의:
+구조로 전환해야 합니다.
 
-다음 작업 전 반드시 regression PASS 유지.
+---
+
+## 다음 구현 순서
+
+```text
+1. GenerationRequest      ✓ 완료
+2. RequestQueue           ✓ 완료
+3. Simple Scheduler       ✓ 완료
+4. Continuous batching    → 다음 작업
+5. OpenAI-compatible API  → 예정
+```
+
+즉
+
+# mini-vLLM serving layer
+
+구현 단계입니다.
+
+---
+
+## tokenizer 완료
+
+Python tokenizer 완전 제거 완료.
+BPE parity 달성.
+
+---
+
+# 빌드 방법
+
+## 반드시 Release Build 권장
+
+Debug는 매우 느립니다.
+
+```bash
+cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build cmake-build-release --config Release
+```
+
+실행:
+
+```powershell
+cd cmake-build-release
+./mLLM.exe
+```
+
+---
+
+# 주의 사항
+
+---
+
+## Streaming Output는 지금 비활성화 유지
+
+이유:
+
+per-token decode + flush는
+개발 단계에서 매우 느립니다.
+
+streaming은
+
+# 성능 개선이 아니라 UX 개선
+
+입니다.
+
+현재 우선순위가 아닙니다.
 
 ---

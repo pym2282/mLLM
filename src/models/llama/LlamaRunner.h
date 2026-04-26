@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "models/base/GenerateOptions.h"
+#include "tokenizer/ITokenizer.h"
 
 namespace mllm
 {
@@ -28,7 +29,12 @@ namespace mllm
 
         std::vector<int64_t> Generate(
             const std::vector<int64_t>& input_ids,
-            const GenerateOptions& options);
+            const GenerateOptions& options) override;
+
+        std::vector<int64_t> GenerateStreaming(
+            const std::vector<int64_t>& input_ids,
+            const GenerateOptions& options,
+            ITokenizer* tokenizer);
 
         void InitKVCache(int batch_size, int max_seq_len) override;
 

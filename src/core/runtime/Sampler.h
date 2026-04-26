@@ -15,6 +15,7 @@ namespace mllm
             torch::Tensor logits,
             float temperature,
             int top_k,
+            float top_p, // NEW
             bool use_greedy,
             const std::vector<int64_t>& previous_tokens,
             float repetition_penalty

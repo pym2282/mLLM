@@ -1,8 +1,13 @@
 #pragma once
 
-#include <string>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
+
 #include <torch/torch.h>
+
+#include "models/base/GenerateOptions.h"
 
 namespace mllm
 {
@@ -43,6 +48,11 @@ namespace mllm
 
         // 모델 타입 식별
         virtual std::string GetModelType() const = 0;
+
+        // Multi-token generation loop (prefill + decode)
+        virtual std::vector<int64_t> Generate(
+            const std::vector<int64_t>& input_ids,
+            const GenerateOptions& options) = 0;
     };
 
     using ModelRunnerPtr = std::shared_ptr<IModelRunner>;

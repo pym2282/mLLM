@@ -10,9 +10,23 @@ set(Torch_DIR "C:/libtorch/share/cmake/Torch")
 
 find_package(Torch REQUIRED)
 
-file(GLOB_RECURSE SOURCES "src/*.cpp")
+add_executable(mLLM
+        src/main.cpp
 
-add_executable(mLLM ${SOURCES})
+        # runtime
+        src/core/runtime/Sampler.cpp
+
+        # tokenizer
+        src/tokenizer/BpeTokenizer.cpp
+        src/tokenizer/LlamaTokenizer.cpp
+        src/tokenizer/TokenizerJsonLoader.cpp
+
+        # model
+        src/models/llama/LlamaRunner.cpp
+
+        # serving
+        src/serving/Scheduler.cpp
+)
 
 target_precompile_headers(
         mLLM

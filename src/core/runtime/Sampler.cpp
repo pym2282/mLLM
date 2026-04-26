@@ -44,6 +44,7 @@ namespace mllm
         torch::Tensor logits,
         float temperature,
         int top_k,
+        float top_p,
         bool use_greedy,
         const std::vector<int64_t>& previous_tokens,
         float repetition_penalty
@@ -95,6 +96,52 @@ namespace mllm
                 -1,
                 std::get<1>(topk),
                 std::get<0>(topk)
+            );
+
+            probs =
+                filtered_probs /
+                filtered_probs.sum();
+        }
+
+        // --------------------------------
+        // top-p (nucleus sampling)
+        // --------------------------------
+
+        if (top_p < 1.0f)
+        {
+            auto sorted = torch::sort(
+                probs,
+                -1,
+                /*descending=*/true
+            );
+
+            auto sorted_probs = std::get<0>(sorted);
+            auto sorted_indices = std::get<1>(sorted);
+
+            auto cumulative_probs =
+                torch::cumsum(
+                    sorted_probs,
+                    -1
+                );
+
+            auto remove_mask =
+                cumulative_probs > top_p;
+
+            // 첫 token은 항상 유지
+            remove_mask[0] = false;
+
+            sorted_probs.masked_fill_(
+                remove_mask,
+                0
+            );
+
+            auto filtered_probs =
+                torch::zeros_like(probs);
+
+            filtered_probs.scatter_(
+                -1,
+                sorted_indices,
+                sorted_probs
             );
 
             probs =

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 
+#include "KVCache.h"
 #include "core/runtime/Linear.h"
 #include "core/runtime/RoPE.h"
 
@@ -58,7 +59,8 @@ namespace mllm
             int num_kv_heads,
             int head_dim,
             double rope_theta,
-            const torch::Tensor& position_ids)
+            const torch::Tensor& position_ids,
+            KVCache* kv_cache)
         {
             if (hidden.dim() != 3)
             {
@@ -91,6 +93,36 @@ namespace mllm
             auto& rope_sin = cs.second;
             q = RoPE::Apply(q, rope_cos, rope_sin);
             k = RoPE::Apply(k, rope_cos, rope_sin);
+
+            // --------------------------------
+            // KV Cache append + reuse
+            // --------------------------------
+            if (kv_cache != nullptr)
+            {
+                if (kv_cache->IsInitialized())
+                {
+                    // 기존 cache + 새 token concat
+                    k = torch::cat(
+                        {
+                            kv_cache->key,
+                            k
+                        },
+                        2 // seq_len dimension
+                    );
+
+                    v = torch::cat(
+                        {
+                            kv_cache->value,
+                            v
+                        },
+                        2
+                    );
+                }
+
+                // 최신 cache 저장
+                kv_cache->key = k;
+                kv_cache->value = v;
+            }
 
             // ---- GQA: expand K, V to match num_heads ------------------------
             if (n_rep > 1)

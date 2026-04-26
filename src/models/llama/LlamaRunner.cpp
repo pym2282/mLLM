@@ -7,10 +7,12 @@
 #include "models/base/SafeTensorLoader.h"
 #include "models/base/SafeTensorHeaderParser.h"
 #include "models/base/SafeTensorTensorLoader.h"
+#include "models/base/GenerateOptions.h"
 
 #include "core/runtime/EmbeddingLookup.h"
-#include "core/runtime/RMSNorm.h"
-#include "core/runtime/Linear.h"
+//#include "core/runtime/RMSNorm.h"
+//#include "core/runtime/Linear.h"
+#include "core/runtime/Sampler.h"
 #include "core/runtime/TransformerBlock.h"
 
 namespace mllm
@@ -46,6 +48,8 @@ namespace mllm
             }
 
             LoadAllWeights();
+
+            kv_caches_.resize(config_.num_layers);
 
             is_loaded_ = true;
 
@@ -149,11 +153,41 @@ namespace mllm
 
         // Positions for prefill: [0, 1, ..., S-1]. Shared across batch.
         // When KV cache lands, decode step will override this to [cache_len].
-        auto position_ids = torch::arange(
-            0, S,
-            torch::TensorOptions()
-                .dtype(torch::kInt64)
-                .device(input_ids.device()));
+        torch::Tensor position_ids;
+
+        bool is_decode_step =
+            (S == 1) &&
+            (!kv_caches_.empty()) &&
+            (kv_caches_[0].IsInitialized());
+
+        if (is_decode_step)
+        {
+            // decode:
+            // cache length 기준 position
+            int64_t cache_len =
+                kv_caches_[0].key.size(2);
+
+            position_ids =
+                torch::tensor(
+                    { cache_len },
+                    torch::TensorOptions()
+                        .dtype(torch::kInt64)
+                        .device(input_ids.device())
+                );
+        }
+        else
+        {
+            // prefill:
+            // 전체 prompt
+            position_ids =
+                torch::arange(
+                    0,
+                    S,
+                    torch::TensorOptions()
+                        .dtype(torch::kInt64)
+                        .device(input_ids.device())
+                );
+        }
 
         // Step 1: embedding lookup
         auto hidden = EmbeddingLookup::Forward(
@@ -171,7 +205,9 @@ namespace mllm
                 config_.head_dim,
                 static_cast<double>(config_.rope_theta),
                 static_cast<double>(config_.rms_norm_eps),
-                position_ids);
+                position_ids,
+                &kv_caches_[i]
+                );
         }
 
         // Step 3: final RMSNorm
@@ -205,6 +241,120 @@ namespace mllm
         return logits;
     }
 
+    std::vector<int64_t> mllm::LlamaRunner::Generate(
+        const std::vector<int64_t>& input_ids,
+        const GenerateOptions& options
+    )
+    {
+        // 최종 생성된 token만 저장
+        std::vector<int64_t> generated;
+
+        for (auto& cache : kv_caches_)
+        {
+            cache.Clear();
+        }
+
+        // generation 중 계속 확장될 입력
+        std::vector<int64_t> current_input_ids = input_ids;
+
+        for (int step = 0; step < options.max_new_tokens; ++step)
+        {
+            // --------------------------------
+            // Prefill / Decode split
+            // --------------------------------
+
+            torch::Tensor input_tensor;
+
+            if (step == 0)
+            {
+                // Prefill:
+                // 전체 prompt를 한 번 계산
+                input_tensor =
+                    torch::tensor(
+                        current_input_ids,
+                        torch::TensorOptions()
+                            .dtype(torch::kInt64)
+                    ).unsqueeze(0); // [1, seq_len]
+            }
+            else
+            {
+                // Decode:
+                // 마지막 생성 token 1개만 넣기
+                input_tensor =
+                    torch::tensor(
+                        {
+                            current_input_ids.back()
+                        },
+                        torch::TensorOptions()
+                            .dtype(torch::kInt64)
+                    ).unsqueeze(0); // [1, 1]
+            }
+
+            // attention mask
+            auto attention_mask =
+                torch::ones(
+                    {
+                        1,
+                        input_tensor.size(1)
+                    },
+                    torch::TensorOptions()
+                        .dtype(torch::kInt64)
+                );
+
+            // Forward
+            auto logits =
+                Forward(
+                    input_tensor,
+                    attention_mask
+                );
+
+            // 마지막 token logits만 사용
+            auto last_logits =
+                logits.index({
+                    0,
+                    logits.size(1) - 1
+                });
+
+            // sampling
+            int64_t next_token =
+                Sampler::Sample(
+                    last_logits,
+                    options.temperature,
+                    options.top_k,
+                    options.use_greedy,
+                    current_input_ids,
+                    options.repetition_penalty
+                );
+
+            std::cout
+                << "[LlamaRunner] last-token argmax token_id="
+                << next_token
+                << std::endl;
+
+            // 생성 결과 저장
+            generated.push_back(next_token);
+
+            // 다음 step 입력에 추가
+            current_input_ids.push_back(next_token);
+
+            // --------------------------------
+            // EOS STOP
+            // --------------------------------
+
+            constexpr int64_t EOS_TOKEN_ID = 2;
+
+            if (next_token == EOS_TOKEN_ID)
+            {
+                std::cout
+                    << "[LlamaRunner] EOS token detected. Stop generation."
+                    << std::endl;
+
+                break;
+            }
+        }
+
+        return generated;
+    }
     void LlamaRunner::InitKVCache(int batch_size, int max_seq_len)
     {
         // TODO: real KV cache manager.

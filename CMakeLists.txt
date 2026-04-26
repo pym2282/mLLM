@@ -10,9 +10,14 @@ set(Torch_DIR "C:/libtorch/share/cmake/Torch")
 
 find_package(Torch REQUIRED)
 
-add_executable(mLLM
-        src/main.cpp
-        src/models/llama/LlamaRunner.cpp
+file(GLOB_RECURSE SOURCES "src/*.cpp")
+
+add_executable(mLLM ${SOURCES})
+
+target_precompile_headers(
+        mLLM
+        PRIVATE
+        src/pch.h
 )
 
 target_include_directories(mLLM PRIVATE
@@ -23,6 +28,15 @@ target_include_directories(mLLM PRIVATE
 
 target_link_libraries(mLLM PRIVATE
         ${TORCH_LIBRARIES}
+)
+
+add_custom_command(
+        TARGET mLLM
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "C:/libtorch/lib"
+        $<TARGET_FILE_DIR:mLLM>
+        COMMENT "Copying LibTorch DLLs..."
 )
 
 if (MSVC)

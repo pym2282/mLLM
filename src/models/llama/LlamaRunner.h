@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "models/base/GenerateOptions.h"
+
 namespace mllm
 {
     class LlamaRunner : public IModelRunner
@@ -23,6 +25,10 @@ namespace mllm
         torch::Tensor Forward(
             const torch::Tensor& input_ids,
             const torch::Tensor& attention_mask) override;
+
+        std::vector<int64_t> Generate(
+            const std::vector<int64_t>& input_ids,
+            const GenerateOptions& options);
 
         void InitKVCache(int batch_size, int max_seq_len) override;
 
@@ -62,6 +68,8 @@ namespace mllm
 
         // Per-layer tensor views into weights_. Size = config_.num_layers.
         std::vector<LayerWeights> layer_weights_;
+
+        std::vector<KVCache> kv_caches_;
 
         bool is_loaded_ = false;
     };

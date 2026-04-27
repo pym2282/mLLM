@@ -3,6 +3,7 @@
 #include "Sampler.h"
 
 #include <stdexcept>
+#include <iostream>
 
 namespace mllm
 {
@@ -19,7 +20,10 @@ namespace mllm
 
         for (auto token_id : previous_tokens)
         {
-            if (token_id < 0 || token_id >= logits.size(0))
+            if (
+                token_id < 0 ||
+                token_id >= logits.size(0)
+            )
             {
                 continue;
             }
@@ -57,21 +61,45 @@ namespace mllm
             );
         }
 
-        // repetition penalty 먼저 적용
+        // --------------------------------
+        // repetition penalty
+        // --------------------------------
+
         ApplyRepetitionPenalty(
             logits,
             previous_tokens,
             repetition_penalty
         );
 
-        // greedy mode
-        if (use_greedy || temperature <= 0.0f)
+        // --------------------------------
+        // TRUE greedy mode
+        //
+        // 반드시 sampling path보다 먼저
+        // 완전 차단해야 함
+        // --------------------------------
+
+        if (
+            use_greedy ||
+            temperature <= 0.0f
+        )
         {
-            return torch::argmax(
-                logits,
-                -1
-            ).item<int64_t>();
+            int64_t next_token =
+                torch::argmax(
+                    logits,
+                    -1
+                ).item<int64_t>();
+
+            std::cout
+                << "[Sampler] greedy token = "
+                << next_token
+                << std::endl;
+
+            return next_token;
         }
+
+        // --------------------------------
+        // softmax
+        // --------------------------------
 
         auto probs =
             torch::softmax(
@@ -79,7 +107,10 @@ namespace mllm
                 -1
             );
 
+        // --------------------------------
         // top-k filtering
+        // --------------------------------
+
         if (top_k > 0)
         {
             auto topk =
@@ -90,7 +121,9 @@ namespace mllm
                 );
 
             auto filtered_probs =
-                torch::zeros_like(probs);
+                torch::zeros_like(
+                    probs
+                );
 
             filtered_probs.scatter_(
                 -1,
@@ -109,14 +142,18 @@ namespace mllm
 
         if (top_p < 1.0f)
         {
-            auto sorted = torch::sort(
-                probs,
-                -1,
-                /*descending=*/true
-            );
+            auto sorted =
+                torch::sort(
+                    probs,
+                    -1,
+                    /*descending=*/true
+                );
 
-            auto sorted_probs = std::get<0>(sorted);
-            auto sorted_indices = std::get<1>(sorted);
+            auto sorted_probs =
+                std::get<0>(sorted);
+
+            auto sorted_indices =
+                std::get<1>(sorted);
 
             auto cumulative_probs =
                 torch::cumsum(
@@ -136,7 +173,9 @@ namespace mllm
             );
 
             auto filtered_probs =
-                torch::zeros_like(probs);
+                torch::zeros_like(
+                    probs
+                );
 
             filtered_probs.scatter_(
                 -1,
@@ -149,12 +188,24 @@ namespace mllm
                 filtered_probs.sum();
         }
 
+        // --------------------------------
+        // multinomial sampling
+        // --------------------------------
+
         auto next_token =
             torch::multinomial(
                 probs,
                 1
             );
 
-        return next_token.item<int64_t>();
+        int64_t sampled_token =
+            next_token.item<int64_t>();
+
+        std::cout
+            << "[Sampler] sampled token = "
+            << sampled_token
+            << std::endl;
+
+        return sampled_token;
     }
 }

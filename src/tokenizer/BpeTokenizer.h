@@ -25,7 +25,7 @@ namespace mllm
 
         std::string Decode(
             const std::vector<int64_t>& tokens
-        ) override;
+        ) const override;
 
         int64_t GetEOSTokenId() const override;
 

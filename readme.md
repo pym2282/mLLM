@@ -4,9 +4,16 @@
 
 HuggingFace의 `config.json` + `model.safetensors`를
 **ONNX / TorchScript 없이 직접 로드**하여
-forward / generation / KV cache decode를 수행합니다.
 
-이 프로젝트의 목표는 단순 inference demo가 아니라,
+* full forward
+* generation
+* KV cache decode
+* tokenizer encode/decode
+* model-specific runtime
+
+를 수행합니다.
+
+목표는 단순 inference demo가 아니라
 
 # "mini-vLLM / mini-llama.cpp 수준의 standalone runtime"
 
@@ -25,17 +32,15 @@ forward / generation / KV cache decode를 수행합니다.
 * scheduler
 * OpenAI-compatible serving
 
-까지를 단계적으로 구현합니다.
+까지 단계적으로 구현합니다.
 
 ---
 
-# 현재 프로젝트 상태 (중요)
+# 현재 프로젝트 상태 (매우 중요)
 
-## 현재는 어디까지 왔는가
+현재 프로젝트는
 
-현재는
-
-# Core Runtime은 거의 완료
+# Core Runtime 완료 + Multi-model 구조 정리 완료
 
 상태입니다.
 
@@ -46,22 +51,26 @@ forward / generation / KV cache decode를 수행합니다.
 * KV cache decode 완료
 * prefill / decode split 완료
 * tokenizer abstraction 완료
+* Qwen3 FP16 parity 완료
+* QwenRunner 분리 완료
+* LlamaRunner / QwenRunner 구조 분리 완료
+* ModelRunnerFactory 자동 분기 완료
 
 까지 끝났습니다.
 
-이제 남은 것은
-
-# tokenizer parity + serving layer
-
-입니다.
-
-즉 프로젝트는
+현재는
 
 # "LLM 구현 중"
 
 이 아니라
 
-# "mini-vLLM finishing stage"
+# "실사용 가능한 mini-vLLM 엔진 완성 단계"
+
+입니다.
+
+이제 남은 핵심은
+
+# AWQ 지원 + Serving Layer + Continuous Batching
 
 입니다.
 
@@ -82,27 +91,34 @@ forward / generation / KV cache decode를 수행합니다.
 * MSVC
 * CLion
 
-## Reference Model
+---
 
-### TinyLlama
+# 현재 지원 모델
 
-* 22 layers
-* hidden size: 2048
-* attention heads: 32
-* KV heads: 4 (GQA)
-* BF16
+## Llama Family
 
-## Expansion Target
+* TinyLlama
+* Llama 계열
+* 기본 Llama architecture
 
-향후 지원 예정:
+## Qwen Family
 
-* Qwen
+* Qwen3 FP16
+* Qwen3-8B-FP16 parity 완료
+
+## 다음 목표
+
+* Qwen3-14B-AWQ
+* Qwen3-8B-AWQ
+* GGUF loader (후순위)
 * Mistral
 * Gemma
 
 ---
 
-# 중요한 설계 원칙 (매우 중요)
+# 중요한 설계 원칙
+
+---
 
 ## 1. Stateless Runtime
 
@@ -122,9 +138,11 @@ src/core/runtime/*
 
 * Attention
 * RMSNorm
-* Sampler
-* MLP
+* Linear
 * RoPE
+* MLP
+* Sampler
+* TransformerBlock
 
 모델별 구현과 완전히 분리합니다.
 
@@ -135,14 +153,16 @@ src/core/runtime/*
 위치:
 
 ```text
-src/models/llama/
+src/models/
 ```
 
-여기는
+구조:
 
-# TinyLlama 전용 구현
-
-만 존재합니다.
+```text
+IModelRunner
+ ├── LlamaRunner
+ └── QwenRunner
+```
 
 즉:
 
@@ -151,12 +171,11 @@ src/models/llama/
 * generation loop
 * model-specific config
 
-향후
+는 모델별 Runner가 담당합니다.
 
-* QwenRunner
-* MistralRunner
+runtime은 재사용합니다.
 
-추가 시 runtime 재사용이 가능해야 합니다.
+이 구조가 매우 중요합니다.
 
 ---
 
@@ -170,31 +189,31 @@ src/tokenizer/
 
 구조:
 
-```cpp
+```text
 ITokenizer
-↓
-LlamaTokenizer
+ ├── BpeTokenizer
+ ├── LlamaTokenizer
+ └── QwenTokenizer
 ```
 
-현재는:
+현재:
 
-* native decode (partial)
-* native encode (MVP)
-* 일부 Python bridge 유지
-
-최종 목표는:
-
-# Python tokenizer 완전 제거
-
-입니다.
+* native encode 완료
+* native decode 완료
+* EOS/BOS handling 완료
+* HF parity 확보
 
 즉:
 
-```text
-모델만 있으면 실행
-```
+# Python tokenizer 제거 완료
 
-이 목표입니다.
+입니다.
+
+목표:
+
+```text
+모델만 있으면 실행 가능
+```
 
 ---
 
@@ -217,6 +236,8 @@ safetensors key == internal key
 ```
 
 rename / remap 하지 않습니다.
+
+이게 유지보수 핵심입니다.
 
 ---
 
@@ -242,125 +263,133 @@ PASS가 뜨지 않으면
 
 # 현재 구현 완료 상태
 
+---
+
 ## Core Runtime
 
 | 영역                                             | 상태 |
 | ---------------------------------------------- | -- |
 | Config / safetensors 로딩                        | 완료 |
-| BF16 / F16 / F32 tensor 디코딩                    | 완료 |
+| sharded safetensors 지원                         | 완료 |
+| BF16 / F16 / F32 tensor decode                 | 완료 |
 | Embedding / RMSNorm                            | 완료 |
 | Attention (GQA + RoPE + causal)                | 완료 |
 | MLP (SwiGLU)                                   | 완료 |
 | Transformer Block                              | 완료 |
-| Full 22-layer forward parity                   | 완료 |
-| Regression Test 자동화                            | 완료 |
-| Sampler (greedy / temperature / top-k / top-p) | 완료 |
+| Full forward parity                            | 완료 |
+| Sampler (greedy / top-k / top-p / temperature) | 완료 |
 | Repetition penalty                             | 완료 |
-| Multi-token generation loop                    | 완료 |
+| Multi-token generation                         | 완료 |
 | KV cache                                       | 완료 |
 | Prefill / Decode split                         | 완료 |
-| Persistent Chat History                        | 완료 |
-| Sliding Window                                 | 완료 |
 | Interactive CLI                                | 완료 |
 
 ---
 
 ## Tokenizer
 
-| 영역                         | 상태 |
-| -------------------------- | -- |
-| ITokenizer abstraction     | 완료 |
-| BpeTokenizer (공통 BPE 엔진)  | 완료 |
-| LlamaTokenizer (Metaspace) | 완료 |
-| tokenizer.json load        | 완료 |
-| vocab / special token parse | 완료 |
-| BOS / EOS handling         | 완료 |
-| Native Encode (full BPE)   | 완료 |
-| BPE merge rules            | 완료 |
-| byte fallback              | 완료 |
-| unicode handling           | 완료 |
-| Full HF parity             | 완료 |
-| Native Decode              | 완료 |
-
-HF parity 검증 완료 (`tokenizer_parity_test.py` PASS).
+| 영역                       | 상태 |
+| ------------------------ | -- |
+| ITokenizer abstraction   | 완료 |
+| BpeTokenizer             | 완료 |
+| LlamaTokenizer           | 완료 |
+| QwenTokenizer            | 완료 |
+| tokenizer.json load      | 완료 |
+| vocab / merges parse     | 완료 |
+| BOS / EOS handling       | 완료 |
+| Native Encode            | 완료 |
+| Native Decode            | 완료 |
+| Qwen chat template       | 완료 |
+| GPT2 byte decode cleanup | 완료 |
+| HF parity                | 완료 |
 
 ---
 
-## Serving Layer
+## Qwen Support
 
-| 영역                    | 상태      |
-| --------------------- | ------- |
-| Streaming output      | 임시 비활성화 |
-| Request abstraction   | 완료      |
-| Request Queue         | 완료      |
-| Scheduler (sequential)| 완료      |
-| Continuous batching   | 예정      |
-| OpenAI-compatible API | 예정      |
+| 영역                        | 상태 |
+| ------------------------- | -- |
+| Qwen3 config parse        | 완료 |
+| Qwen3 FP16 load           | 완료 |
+| Qwen3 sharded safetensors | 완료 |
+| QK Norm                   | 완료 |
+| Qwen chat template        | 완료 |
+| Qwen tokenizer            | 완료 |
+| greedy decode parity      | 완료 |
+| generation 정상 동작          | 완료 |
+| QwenRunner 분리             | 완료 |
+
+검증 결과:
+
+```text
+Assistant: Paris.
+```
+
+정상 출력 완료.
+
+즉:
+
+# Qwen3 FP16 runtime 성공
+
+입니다.
+
+---
+
+## Architecture
+
+| 영역                 | 상태 |
+| ------------------ | -- |
+| QwenRunner 분리      | 완료 |
+| LlamaRunner 정리     | 완료 |
+| ModelRunnerFactory | 완료 |
+| config 기반 자동 분기    | 완료 |
+
+현재:
+
+```cpp
+auto bundle =
+    ModelRunnerFactory::Create(model_path);
+```
+
+만으로
+
+* runner 선택
+* tokenizer 선택
+
+이 자동 처리됩니다.
 
 ---
 
 # 검증 결과
 
-## Full Forward Parity
+---
 
-TinyLlama 기준:
+## TinyLlama Forward Parity
 
 ```text
-C++ argmax: 2643
-Python argmax: 2643
-PASS: forward parity verified
+C++ argmax == Python argmax
+PASS
 ```
-
-즉:
-
-* HF logits parity 통과
-* argmax 일치
-* multi-token generation 정상 동작
-* KV cache 기반 decode 정상 동작
-
-현재는 단순 forward 테스트가 아니라
-실제 generation 단계까지 정상 동작합니다.
 
 ---
 
-# 현재 가능한 실행 흐름
-
-## Example Flow
+## Qwen3 Forward + Generation
 
 ```text
-User text input
-→ tokenizer encode
-→ full prefill
-→ decode loop (KV cache)
-→ sampler
-→ next token 선택
-→ EOS 종료
-→ decode output
+Assistant: Paris.
 ```
 
-예시:
+검증 완료.
 
-```text
-Input:
-hello
+즉:
 
-Output:
-Hello! How can I help you today?
-```
+* HF logits parity
+* argmax 일치
+* multi-token generation 정상
+* KV cache decode 정상
+* tokenizer parity 정상
 
-주의:
-
-현재 streaming output은
-성능상 이유로 임시 비활성화했습니다.
-
-개발 단계에서는
-
-```text
-Generate()
-→ 마지막에 한 번 decode
-```
-
-방식을 유지합니다.
+까지 완료되었습니다.
 
 ---
 
@@ -369,7 +398,6 @@ Generate()
 ```text
 src/
 ├── main.cpp
-│   └── interactive CLI runtime
 │
 ├── core/runtime/
 │   ├── EmbeddingLookup.h
@@ -385,90 +413,113 @@ src/
 │
 ├── tokenizer/
 │   ├── ITokenizer.h
-│   ├── LlamaTokenizer.h
-│   ├── LlamaTokenizer.cpp
-│   ├── TokenizerJsonLoader.h
-│   └── TokenizerJsonLoader.cpp
+│   ├── BpeTokenizer.h
+│   ├── LlamaTokenizer.*
+│   ├── QwenTokenizer.*
+│   └── TokenizerJsonLoader.*
 │
 ├── models/
 │   ├── base/
 │   │   ├── IModelRunner.h
 │   │   ├── GenerateOptions.h
+│   │   ├── ModelRunnerFactory.h
 │   │   ├── ModelConfigLoader.h
 │   │   ├── SafeTensorHeaderParser.h
 │   │   └── SafeTensorTensorLoader.h
 │   │
-│   └── llama/
-│       ├── LlamaRunner.h
-│       └── LlamaRunner.cpp
+│   ├── llama/
+│   │   ├── LlamaRunner.h
+│   │   └── LlamaRunner.cpp
+│   │
+│   └── qwen/
+│       ├── QwenRunner.h
+│       └── QwenRunner.cpp
 │
 ├── serving/
 │   ├── GenerationRequest.h
 │   ├── RequestQueue.h
-│   ├── Scheduler.h
-│   └── Scheduler.cpp
+│   └── Scheduler.*
 │
 └── scripts/
-    ├── verify_full_forward.py
-    └── regression_test.py
+    ├── regression_test.py
+    ├── test_qwen3_parity.py
+    └── verify_full_forward.py
 ```
 
 ---
 
-# 다음 작업 (AI가 이어서 해야 할 작업)
-
-## 최우선 작업
-
-# Request abstraction + Request Queue
-
-즉:
-
-```text
-single blocking Generate()
-```
-
-에서
-
-```text
-request 생성
-→ queue 저장
-→ scheduler가 처리
-```
-
-구조로 전환해야 합니다.
+# 다음 작업 (매우 중요)
 
 ---
 
-## 다음 구현 순서
+# 최우선 작업
+
+# Qwen3-14B-AWQ 지원
+
+현재 가장 중요한 다음 단계입니다.
+
+이유:
+
+FP16은 검증용이고
+
+실사용은
+
+# AWQ
+
+입니다.
+
+목표:
 
 ```text
-1. GenerationRequest      ✓ 완료
-2. RequestQueue           ✓ 완료
-3. Simple Scheduler       ✓ 완료
-4. Continuous batching    → 다음 작업
-5. OpenAI-compatible API  → 예정
+Qwen3-14B-AWQ
+```
+
+특히 3060 12GB 기준으로
+
+가장 좋은 sweet spot입니다.
+
+---
+
+# 구현 순서
+
+```text
+1. AWQ tensor naming 확인
+2. qweight / qzeros / scales / g_idx 로드
+3. dequantize → fp16 parity 확보
+4. 이후 fused int4 matmul 고려
+```
+
+주의:
+
+GGUF는 후순위입니다.
+
+지금은
+
+# AWQ 먼저
+
+입니다.
+
+---
+
+# 그 다음
+
+```text
+Continuous batching
+→ Scheduler 고도화
+→ OpenAI-compatible API
 ```
 
 즉
 
 # mini-vLLM serving layer
 
-구현 단계입니다.
+완성 단계입니다.
 
 ---
 
-## tokenizer 완료
+# 빌드
 
-Python tokenizer 완전 제거 완료.
-BPE parity 달성.
-
----
-
-# 빌드 방법
-
-## 반드시 Release Build 권장
-
-Debug는 매우 느립니다.
+## Release Build 권장
 
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
@@ -486,14 +537,7 @@ cd cmake-build-release
 
 # 주의 사항
 
----
-
-## Streaming Output는 지금 비활성화 유지
-
-이유:
-
-per-token decode + flush는
-개발 단계에서 매우 느립니다.
+## Streaming Output는 우선순위 낮음
 
 streaming은
 
@@ -501,6 +545,17 @@ streaming은
 
 입니다.
 
-현재 우선순위가 아닙니다.
+현재 우선순위는
+
+```text
+AWQ
+runtime
+batching
+serving
+```
+
+입니다.
+
+streaming 최적화는 후순위입니다.
 
 ---

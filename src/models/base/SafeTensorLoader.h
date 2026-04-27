@@ -12,21 +12,49 @@ namespace mllm
     public:
         // Step 1:
         // model.safetensors 파일 존재 여부 확인
-        static bool Exists(const std::string& model_dir)
+        static bool Exists(
+            const std::string& model_path)
         {
-            const std::string file_path = model_dir + "/model.safetensors";
+            namespace fs = std::filesystem;
 
-            if (!std::filesystem::exists(file_path))
+            const fs::path single_file =
+                fs::path(model_path) /
+                "model.safetensors";
+
+            const fs::path sharded_index =
+                fs::path(model_path) /
+                "model.safetensors.index.json";
+
+            if (fs::exists(single_file))
             {
-                std::cerr << "[SafeTensorLoader] File not found: "
-                          << file_path << std::endl;
-                return false;
+                std::cout
+                    << "[SafeTensorLoader] Found single safetensor: "
+                    << single_file.string()
+                    << std::endl;
+
+                return true;
             }
 
-            std::cout << "[SafeTensorLoader] Found: "
-                      << file_path << std::endl;
+            if (fs::exists(sharded_index))
+            {
+                std::cout
+                    << "[SafeTensorLoader] Found sharded safetensor index: "
+                    << sharded_index.string()
+                    << std::endl;
 
-            return true;
+                return true;
+            }
+
+            std::cerr
+                << "[SafeTensorLoader] File not found:\n"
+                << "  "
+                << single_file.string()
+                << "\n"
+                << "  "
+                << sharded_index.string()
+                << std::endl;
+
+            return false;
         }
 
         // Step 2:

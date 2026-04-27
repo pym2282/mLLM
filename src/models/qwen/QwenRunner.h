@@ -1,3 +1,5 @@
+// src/models/qwen/QwenRunner.h
+
 #pragma once
 
 #include "models/base/IModelRunner.h"
@@ -5,7 +7,6 @@
 #include "core/runtime/TransformerBlock.h"
 
 #include <torch/torch.h>
-
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,36 +16,25 @@
 
 namespace mllm
 {
-    class LlamaRunner : public IModelRunner
+    class QwenRunner : public IModelRunner
     {
     public:
-        LlamaRunner();
-        ~LlamaRunner() override = default;
+        QwenRunner() = default;
+        ~QwenRunner() override = default;
 
-        bool Load(
-            const std::string& model_path
-        ) override;
+        bool Load(const std::string& model_path) override;
 
         torch::Tensor Forward(
             const torch::Tensor& input_ids,
-            const torch::Tensor& attention_mask
-        ) override;
+            const torch::Tensor& attention_mask) override;
 
         std::vector<int64_t> Generate(
             const std::vector<int64_t>& input_ids,
-            const GenerateOptions& options
-        ) override;
-
-        std::vector<int64_t> GenerateStreaming(
-            const std::vector<int64_t>& input_ids,
-            const GenerateOptions& options,
-            ITokenizer* tokenizer
-        );
+            const GenerateOptions& options) override;
 
         void InitKVCache(
             int batch_size,
-            int max_seq_len
-        ) override;
+            int max_seq_len) override;
 
         const ModelConfig& GetConfig() const override;
 
@@ -52,40 +42,39 @@ namespace mllm
 
     private:
         bool LoadConfig(
-            const std::string& config_path
-        );
+            const std::string& config_path);
 
         torch::Tensor& LoadWeight(
-            const std::string& name
-        );
+            const std::string& name);
 
         void LoadAllWeights();
+
+        std::vector<int64_t> GenerateInternal(
+            const std::vector<int64_t>& input_ids,
+            const GenerateOptions& options,
+            bool streaming,
+            ITokenizer* tokenizer);
 
     private:
         ModelConfig config_;
 
         std::string model_path_;
 
-        // safetensors header metadata
         std::unordered_map<
             std::string,
             TensorMeta
         > tensor_map_;
 
-        // loaded tensors
         std::unordered_map<
             std::string,
             torch::Tensor
         > weights_;
 
-        // per-layer views
-        std::vector<
-            LayerWeights
-        > layer_weights_;
+        std::vector<LayerWeights>
+            layer_weights_;
 
-        std::vector<
-            KVCache
-        > kv_caches_;
+        std::vector<KVCache>
+            kv_caches_;
 
         bool is_loaded_ = false;
     };

@@ -21,8 +21,18 @@ namespace mllm
 
         virtual std::string Decode(
             const std::vector<int64_t>& tokens
-        ) = 0;
+        ) const = 0;
 
         virtual int64_t GetEOSTokenId() const = 0;
+
+        virtual std::string BuildChatPrompt(
+                const std::string& system_prompt,
+                const std::string& user_prompt
+        ) const
+        {
+            return system_prompt + "\n\nUser: " +
+                   user_prompt +
+                   "\nAssistant: ";
+        }
     };
 }

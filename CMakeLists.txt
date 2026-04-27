@@ -19,10 +19,12 @@ add_executable(mLLM
         # tokenizer
         src/tokenizer/BpeTokenizer.cpp
         src/tokenizer/LlamaTokenizer.cpp
+        src/tokenizer/QwenTokenizer.cpp
         src/tokenizer/TokenizerJsonLoader.cpp
 
         # model
         src/models/llama/LlamaRunner.cpp
+        src/models/qwen/QwenRunner.cpp
 
         # serving
         src/serving/Scheduler.cpp

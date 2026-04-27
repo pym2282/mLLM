@@ -28,67 +28,171 @@ namespace mllm
             auto it = tensor_map.find(tensor_name);
             if (it == tensor_map.end())
             {
-                throw std::runtime_error("Tensor not found: " + tensor_name);
+                throw std::runtime_error(
+                    "Tensor not found: " + tensor_name
+                );
             }
 
             const auto& meta = it->second;
-            const std::string file_path = model_dir + "/model.safetensors";
 
-            std::ifstream file(file_path, std::ios::binary);
-            if (!file.is_open())
+            // =====================================================
+            // single-file / sharded safetensors support
+            //
+            // TinyLlama:
+            //   model.safetensors
+            //
+            // Qwen3:
+            //   model-00001-of-00005.safetensors
+            // =====================================================
+
+            std::string file_path;
+
+            if (!meta.shard_file.empty())
             {
-                throw std::runtime_error("Failed to open safetensors file.");
+                file_path =
+                    model_dir +
+                    "/" +
+                    meta.shard_file;
+            }
+            else
+            {
+                file_path =
+                    model_dir +
+                    "/model.safetensors";
             }
 
-            // safetensors layout:
-            //   [ 8 bytes little-endian header_size ]
-            //   [ header_size bytes JSON header     ]
-            //   [ raw tensor bytes (per-tensor offsets are relative here) ]
-            uint64_t header_size = 0;
-            file.read(reinterpret_cast<char*>(&header_size), sizeof(uint64_t));
+            std::ifstream file(
+                file_path,
+                std::ios::binary
+            );
 
-            const int64_t data_start = 8 + static_cast<int64_t>(header_size);
-            const int64_t begin = data_start + meta.data_offsets[0];
-            const int64_t end = data_start + meta.data_offsets[1];
-            const int64_t byte_size = end - begin;
+            if (!file.is_open())
+            {
+                throw std::runtime_error(
+                    "Failed to open safetensors file: " +
+                    file_path
+                );
+            }
+
+            // =====================================================
+            // safetensors layout
+            //
+            // [8 bytes header_size]
+            // [header json]
+            // [raw tensor bytes]
+            //
+            // data_offsets are relative to raw tensor region
+            // =====================================================
+
+            uint64_t header_size = 0;
+
+            file.read(
+                reinterpret_cast<char*>(&header_size),
+                sizeof(uint64_t)
+            );
+
+            if (header_size == 0)
+            {
+                throw std::runtime_error(
+                    "Invalid safetensors header size: " +
+                    file_path
+                );
+            }
+
+            const int64_t data_start =
+                8 +
+                static_cast<int64_t>(header_size);
+
+            if (meta.data_offsets.size() != 2)
+            {
+                throw std::runtime_error(
+                    "Invalid data_offsets for tensor: " +
+                    tensor_name
+                );
+            }
+
+            const int64_t begin =
+                data_start +
+                meta.data_offsets[0];
+
+            const int64_t end =
+                data_start +
+                meta.data_offsets[1];
+
+            const int64_t byte_size =
+                end - begin;
 
             if (byte_size <= 0)
             {
                 throw std::runtime_error(
-                    "Invalid tensor byte size for: " + tensor_name);
+                    "Invalid tensor byte size for: " +
+                    tensor_name
+                );
             }
 
-            file.seekg(begin, std::ios::beg);
+            file.seekg(
+                begin,
+                std::ios::beg
+            );
 
-            std::vector<char> buffer(static_cast<size_t>(byte_size));
-            file.read(buffer.data(), byte_size);
+            std::vector<char> buffer(
+                static_cast<size_t>(byte_size)
+            );
 
-            const auto dtype = ResolveDtype(meta.dtype);
-            const size_t elem_size = DtypeSize(meta.dtype);
+            file.read(
+                buffer.data(),
+                byte_size
+            );
 
-            int64_t num_elements = 1;
-            for (auto d : meta.shape) num_elements *= d;
-
-            if (static_cast<int64_t>(elem_size) * num_elements != byte_size)
+            if (!file)
             {
                 throw std::runtime_error(
-                    "Byte size mismatch for tensor: " + tensor_name);
+                    "Failed to read tensor bytes: " +
+                    tensor_name
+                );
             }
 
-            // from_blob borrows memory; clone() copies into owning storage so
-            // the returned tensor outlives the local buffer.
-            auto tensor = torch::from_blob(
-                buffer.data(),
-                meta.shape,
-                torch::TensorOptions().dtype(dtype)
-            ).clone();
+            const auto dtype =
+                ResolveDtype(meta.dtype);
 
-            std::cout << "[SafeTensorTensorLoader] Loaded tensor: "
-                      << tensor_name
-                      << "  dtype=" << meta.dtype
-                      << "  bytes=" << byte_size
-                      << "  shape=" << tensor.sizes()
-                      << std::endl;
+            const size_t elem_size =
+                DtypeSize(meta.dtype);
+
+            int64_t num_elements = 1;
+
+            for (auto d : meta.shape)
+            {
+                num_elements *= d;
+            }
+
+            if (
+                static_cast<int64_t>(elem_size) *
+                num_elements !=
+                byte_size
+            )
+            {
+                throw std::runtime_error(
+                    "Byte size mismatch for tensor: " +
+                    tensor_name
+                );
+            }
+
+            auto tensor =
+                torch::from_blob(
+                    buffer.data(),
+                    meta.shape,
+                    torch::TensorOptions()
+                        .dtype(dtype)
+                ).clone();
+
+            std::cout
+                << "[SafeTensorTensorLoader] Loaded tensor: "
+                << tensor_name
+                << " | file=" << file_path
+                << " | dtype=" << meta.dtype
+                << " | bytes=" << byte_size
+                << " | shape=" << tensor.sizes()
+                << std::endl;
 
             return tensor;
         }

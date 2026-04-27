@@ -294,7 +294,7 @@ namespace mllm
 
     std::string BpeTokenizer::Decode(
         const std::vector<int64_t>& tokens
-    )
+    ) const
     {
         static const std::string kBos = "<s>";
         static const std::string kEos = "</s>";

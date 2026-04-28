@@ -48,6 +48,13 @@ namespace mllm
     {
         try
         {
+            token_to_id_.clear();
+            id_to_token_.clear();
+            merge_rank_.clear();
+            bos_token_id_ = -1;
+            eos_token_id_ = -1;
+            byte_fallback_ = false;
+
             auto j = TokenizerJsonLoader::Load(model_path);
 
             // vocab
@@ -98,6 +105,9 @@ namespace mllm
                 const std::string content =
                     item["content"].get<std::string>();
                 const int64_t id = item["id"].get<int64_t>();
+
+                token_to_id_[content] = id;
+                id_to_token_[id] = content;
 
                 if      (content == "<s>")  bos_token_id_ = id;
                 else if (content == "</s>") eos_token_id_ = id;
@@ -249,7 +259,7 @@ namespace mllm
 
     std::vector<int64_t> BpeTokenizer::Encode(
         const std::string& text
-    )
+    ) const
     {
         std::vector<int64_t> result;
 

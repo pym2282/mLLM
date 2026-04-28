@@ -4,6 +4,7 @@
 #include <string>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 
 #include <nlohmann/json.hpp>
 
@@ -27,13 +28,14 @@ namespace mllm
     {
     public:
         // Read model_type from config.json and create the matching runner + tokenizer.
-        // Falls back to Llama on any parse error.
+        // Unknown or unreadable model types fail explicitly to avoid loading the
+        // wrong architecture and producing misleading tensor errors later.
         static ModelBundle Create(const std::string& model_path)
         {
             const std::string model_type =
                 ReadModelType(model_path + "/config.json");
 
-            std::cout
+            std::cerr
                 << "[ModelRunnerFactory] model_type=" << model_type
                 << " path=" << model_path
                 << std::endl;
@@ -45,10 +47,16 @@ namespace mllm
                 bundle.runner    = std::make_unique<QwenRunner>();
                 bundle.tokenizer = std::make_unique<QwenTokenizer>();
             }
-            else
+            else if (model_type == "llama")
             {
                 bundle.runner    = std::make_unique<LlamaRunner>();
                 bundle.tokenizer = std::make_unique<LlamaTokenizer>();
+            }
+            else
+            {
+                throw std::runtime_error(
+                    "Unsupported model_type '" + model_type +
+                    "' in " + model_path + "/config.json");
             }
 
             return bundle;
@@ -61,16 +69,25 @@ namespace mllm
             {
                 std::ifstream f(config_path);
                 if (!f.is_open())
-                    return "llama";
+                {
+                    throw std::runtime_error(
+                        "Failed to open model config: " + config_path);
+                }
 
                 nlohmann::json j;
                 f >> j;
 
-                return j.value("model_type", "llama");
+                if (!j.contains("model_type"))
+                {
+                    throw std::runtime_error(
+                        "Missing model_type in config: " + config_path);
+                }
+
+                return j.value("model_type", "");
             }
-            catch (...)
+            catch (const std::exception&)
             {
-                return "llama";
+                throw;
             }
         }
     };

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <torch/torch.h>
-#include <iostream>
 
 namespace mllm
 {
@@ -25,10 +24,6 @@ namespace mllm
                 input_ids,
                 embedding_weight
             );
-
-            std::cout << "[EmbeddingLookup] Success" << std::endl;
-            std::cout << "  input_ids shape: " << input_ids.sizes() << std::endl;
-            std::cout << "  output shape: " << output.sizes() << std::endl;
 
             return output;
         }

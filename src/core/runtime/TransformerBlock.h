@@ -56,7 +56,7 @@ namespace mllm
             // Attention Block
             // =====================================================
 
-            auto residual = hidden;
+            auto residual = hidden.clone();
 
             auto h = RMSNorm::Forward(
                 hidden,
@@ -190,7 +190,7 @@ namespace mllm
             // MLP Block
             // =====================================================
 
-            residual = h;
+            residual = h.clone();
 
             h = RMSNorm::Forward(
                 h,

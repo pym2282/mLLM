@@ -109,7 +109,7 @@ namespace mllm
                 sizeof(uint64_t)
             );
 
-            if (header_size == 0)
+            if (!file || header_size == 0)
             {
                 std::cerr
                     << "[SafeTensorHeaderParser] Invalid header size"
@@ -125,6 +125,16 @@ namespace mllm
                 header_json.data(),
                 static_cast<std::streamsize>(header_size)
             );
+
+            if (!file)
+            {
+                std::cerr
+                    << "[SafeTensorHeaderParser] Failed to read header: "
+                    << file_path
+                    << std::endl;
+
+                return false;
+            }
 
             nlohmann::json j =
                 nlohmann::json::parse(
@@ -161,6 +171,20 @@ namespace mllm
                         "data_offsets",
                         std::vector<int64_t>{}
                     );
+
+                if (meta.dtype == "UNKNOWN" ||
+                    meta.shape.empty() ||
+                    meta.data_offsets.size() != 2 ||
+                    meta.data_offsets[0] < 0 ||
+                    meta.data_offsets[1] <= meta.data_offsets[0])
+                {
+                    std::cerr
+                        << "[SafeTensorHeaderParser] Invalid tensor metadata: "
+                        << it.key()
+                        << std::endl;
+
+                    return false;
+                }
 
                 meta.shard_file =
                     shard_name;

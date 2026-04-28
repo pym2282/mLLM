@@ -3,6 +3,7 @@
 #pragma once
 
 #include "models/base/GenerateOptions.h"
+#include <atomic>
 #include <cstdint>
 #include <future>
 #include <string>
@@ -23,7 +24,7 @@ namespace mllm
         std::string                        request_id;
         std::vector<int64_t>               prompt_tokens;
         GenerateOptions                    options;
-        RequestStatus                      status = RequestStatus::Pending;
+        std::atomic<RequestStatus>         status = RequestStatus::Pending;
         std::promise<std::vector<int64_t>> result_promise;
     };
 }

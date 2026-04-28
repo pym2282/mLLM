@@ -13,7 +13,7 @@
 #include "core/runtime/Sampler.h"
 #include "core/runtime/TransformerBlock.h"
 #include "core/runtime/RMSNorm.h"
-#include "core/runtime/Linear.h"
+#include "debug/TensorCompare.h"
 
 namespace mllm
 {
@@ -22,7 +22,6 @@ namespace mllm
         try
         {
             model_path_ = model_path;
-
             if (!LoadConfig(model_path + "/config.json"))
             {
                 std::cerr << "[QwenRunner] Failed to load config" << std::endl;
@@ -178,6 +177,7 @@ namespace mllm
 
         torch::Tensor position_ids;
 
+
         const bool is_decode =
             (S == 1) &&
             !kv_caches_.empty() &&
@@ -208,6 +208,17 @@ namespace mllm
             weights_.at("model.embed_tokens.weight")
         );
 
+        // -----------------------------
+        // embedding parity compare
+        // -----------------------------
+        if (parity_mode_ && !is_decode)
+        {
+            TensorCompare::CompareTensor(
+                hidden,
+                parity_reference_dir_ + "/embedding.txt"
+            );
+        }
+
         for (int i = 0; i < config_.num_layers; ++i)
         {
             hidden = TransformerBlock::Forward(
@@ -224,21 +235,44 @@ namespace mllm
             );
         }
 
+        if (parity_mode_ && !is_decode) {
+            TensorCompare::CompareTensor(
+                hidden,
+                parity_reference_dir_ + "/last_layer_output.txt"
+            );
+        }
+
         hidden = RMSNorm::Forward(
             hidden,
             weights_.at("model.norm.weight"),
             config_.rms_norm_eps
         );
 
-        const torch::Tensor& lm_head_w =
-            config_.tie_word_embeddings
-            ? weights_.at("model.embed_tokens.weight")
-            : weights_.at("lm_head.weight");
+        if (parity_mode_ && !is_decode)
+        {
+            TensorCompare::CompareTensor(
+                hidden,
+                parity_reference_dir_ + "/final_norm_output.txt"
+            );
+        }
 
-        auto logits = Linear::Forward(
-            hidden,
-            lm_head_w
-        );
+        const torch::Tensor& lm_head_w =
+            (weights_.count("lm_head.weight") > 0)
+                ? weights_.at("lm_head.weight")
+                : weights_.at("model.embed_tokens.weight");
+
+        auto logits = Linear::Forward(hidden, lm_head_w);
+
+        if (parity_mode_ && !is_decode)
+        {
+            auto last_logits =
+                logits.select(1, logits.size(1) - 1);
+
+            TensorCompare::CompareTensor(
+                last_logits,
+                parity_reference_dir_ + "/final_logits.txt"
+            );
+        }
 
         return logits;
     }
@@ -377,6 +411,16 @@ namespace mllm
     std::string QwenRunner::GetModelType() const
     {
         return "qwen";
+    }
+
+    void QwenRunner::SetParityMode(bool enabled)
+    {
+        parity_mode_ = enabled;
+    }
+
+    void QwenRunner::SetParityReferenceDir(const std::string& path)
+    {
+        parity_reference_dir_ = path;
     }
 
     bool QwenRunner::LoadConfig(

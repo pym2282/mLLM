@@ -53,6 +53,17 @@ namespace mllm
         virtual std::vector<int64_t> Generate(
             const std::vector<int64_t>& input_ids,
             const GenerateOptions& options) = 0;
+
+        // Optional diagnostics path. Production runners should keep this off.
+        virtual void SetParityMode(bool enabled)
+        {
+            (void)enabled;
+        }
+
+        virtual void SetParityReferenceDir(const std::string& path)
+        {
+            (void)path;
+        }
     };
 
     using ModelRunnerPtr = std::shared_ptr<IModelRunner>;

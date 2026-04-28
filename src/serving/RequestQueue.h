@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <stdexcept>
 
 namespace mllm
 {
@@ -15,8 +16,17 @@ namespace mllm
     public:
         void Push(std::shared_ptr<GenerationRequest> req)
         {
+            if (!req)
+            {
+                throw std::invalid_argument("RequestQueue cannot push null request.");
+            }
+
             {
                 std::lock_guard<std::mutex> lock(mutex_);
+                if (shutdown_)
+                {
+                    throw std::runtime_error("RequestQueue is shut down.");
+                }
                 queue_.push(std::move(req));
             }
             cv_.notify_one();

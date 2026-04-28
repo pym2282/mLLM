@@ -283,6 +283,8 @@ PASS가 뜨지 않으면
 | KV cache                                       | 완료 |
 | Prefill / Decode split                         | 완료 |
 | Interactive CLI                                | 완료 |
+| Residual clone (in-place fix)                  | 완료 |
+| Sampler input validation                       | 완료 |
 
 ---
 
@@ -301,6 +303,7 @@ PASS가 뜨지 않으면
 | Native Decode            | 완료 |
 | Qwen chat template       | 완료 |
 | GPT2 byte decode cleanup | 완료 |
+| Special token handling  | 완료 |
 | HF parity                | 완료 |
 
 ---
@@ -343,6 +346,7 @@ Assistant: Paris.
 | LlamaRunner 정리     | 완료 |
 | ModelRunnerFactory | 완료 |
 | config 기반 자동 분기    | 완료 |
+| Parity mode support   | 완료 |
 
 현재:
 
@@ -440,10 +444,14 @@ src/
 │   ├── RequestQueue.h
 │   └── Scheduler.*
 │
+├── debug/
+│   └── TensorCompare.h
+│
 └── scripts/
     ├── regression_test.py
-    ├── test_qwen3_parity.py
-    └── verify_full_forward.py
+    ├── export_qwen3_parity.py
+    ├── verify_full_forward.py
+    └── parity/
 ```
 
 ---
@@ -517,6 +525,23 @@ Continuous batching
 
 ---
 
+# 그 다음
+
+```text
+Streaming output
+→ Server-Sent Events (SSE)
+```
+
+---
+
+# 최종 목표
+
+```text
+mini-vLLM 수준의 full-featured runtime
+```
+
+---
+
 # 빌드
 
 ## Release Build 권장
@@ -526,12 +551,43 @@ cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
 cmake --build cmake-build-release --config Release
 ```
 
-실행:
+---
+
+# 실행 옵션
+
+## 인터랙티브 모드 (기본)
 
 ```powershell
-cd cmake-build-release
-./mLLM.exe
+./mLLM.exe models/Qwen3-8B-FP16
 ```
+
+## Parity Check 모드
+
+```powershell
+./mLLM.exe models/Qwen3-8B-FP16 --parity --parity-dir scripts/parity
+```
+
+## 배치 토큰화 모드
+
+```powershell
+./mLLM.exe models/Qwen3-8B-FP16 --tokenize-batch < input.txt
+```
+
+---
+
+# 파이썬 스크립트 옵션
+
+## verify_full_forward.py
+
+```bash
+python scripts/verify_full_forward.py --model-path models/TinyLlama --dtype bfloat16
+```
+
+옵션:
+
+* `--model-path`: 모델 경로 (기본: models/TinyLlama)
+* `--dtype`: dtype (기본: bfloat16)
+* `--ids`: 입력 토큰 ID (기본: [15043, 6796, 263, 1243])
 
 ---
 
@@ -539,23 +595,16 @@ cd cmake-build-release
 
 ## Streaming Output는 우선순위 낮음
 
-streaming은
+streaming은 성능 개선이 아니라 UX 개선입니다.
 
-# 성능 개선이 아니라 UX 개선
-
-입니다.
-
-현재 우선순위는
+현재 우선순위:
 
 ```text
-AWQ
-runtime
-batching
-serving
+AWQ → runtime → batching → serving
 ```
-
-입니다.
 
 streaming 최적화는 후순위입니다.
 
 ---
+
+# 참고

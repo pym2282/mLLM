@@ -4,6 +4,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <exception>
 
 #include "models/base/ModelRunnerFactory.h"
 #include "models/base/GenerateOptions.h"
@@ -12,6 +13,7 @@
 constexpr size_t MAX_HISTORY_CHARS = 8000;
 
 static const std::string DEFAULT_MODEL_PATH = "../models/Qwen3-8B-FP16";
+static const std::string DEFAULT_PARITY_DIR = "../scripts/parity";
 
 // Extract the first non-flag argument as model path, or return default.
 static std::string ParseModelPath(int argc, char* argv[])
@@ -25,10 +27,36 @@ static std::string ParseModelPath(int argc, char* argv[])
     return DEFAULT_MODEL_PATH;
 }
 
+static std::string ParseOptionValue(
+    int argc,
+    char* argv[],
+    const std::string& name,
+    const std::string& default_value)
+{
+    const std::string prefix = name + "=";
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg = argv[i];
+        if (arg == name && i + 1 < argc)
+        {
+            return argv[i + 1];
+        }
+        if (arg.rfind(prefix, 0) == 0)
+        {
+            return arg.substr(prefix.size());
+        }
+    }
+    return default_value;
+}
+
 // --parity: fixed forward pass used by regression_test.py
-static int RunParityCheck(const std::string& model_path)
+static int RunParityCheck(
+    const std::string& model_path,
+    const std::string& parity_dir)
 {
     auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+    bundle.runner->SetParityMode(true);
+    bundle.runner->SetParityReferenceDir(parity_dir);
 
     if (!bundle.runner->Load(model_path))
     {
@@ -43,12 +71,24 @@ static int RunParityCheck(const std::string& model_path)
 
     auto mask = torch::ones({1, 4}, torch::kInt64);
 
-    bundle.runner->Forward(ids, mask);
+    auto logits = bundle.runner->Forward(ids, mask);
+    auto last_logits = logits.index({
+        0,
+        logits.size(1) - 1
+    }).to(torch::kFloat32);
+
+    std::cout
+        << "last-token argmax token_id: "
+        << torch::argmax(last_logits, -1).item<int64_t>()
+        << std::endl;
+
     return 0;
 }
 
 int main(int argc, char* argv[])
 {
+    try
+    {
     const std::string model_path = ParseModelPath(argc, argv);
 
     // --------------------------------
@@ -57,7 +97,15 @@ int main(int argc, char* argv[])
     for (int i = 1; i < argc; ++i)
     {
         if (std::string(argv[i]) == "--parity")
-            return RunParityCheck(model_path);
+            return RunParityCheck(
+                model_path,
+                ParseOptionValue(
+                    argc,
+                    argv,
+                    "--parity-dir",
+                    DEFAULT_PARITY_DIR
+                )
+            );
     }
 
     // --------------------------------
@@ -85,6 +133,36 @@ int main(int argc, char* argv[])
                 std::cout << ids[j];
             }
             std::cout << std::endl;
+            return 0;
+        }
+    }
+
+    // --------------------------------
+    // --tokenize-batch: read stdin lines and print one token-ID line per input
+    // --------------------------------
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::string(argv[i]) == "--tokenize-batch")
+        {
+            auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+
+            if (!bundle.tokenizer->Load(model_path))
+            {
+                std::cerr << "Tokenizer load failed." << std::endl;
+                return -1;
+            }
+
+            std::string text;
+            while (std::getline(std::cin, text))
+            {
+                const auto ids = bundle.tokenizer->Encode(text);
+                for (size_t j = 0; j < ids.size(); ++j)
+                {
+                    if (j > 0) std::cout << ' ';
+                    std::cout << ids[j];
+                }
+                std::cout << '\n';
+            }
             return 0;
         }
     }
@@ -171,6 +249,8 @@ int main(int argc, char* argv[])
 
         auto input_ids = bundle.tokenizer->Encode(chat_history);
 
+        std::cout << "\n[Encode]\n" << input_ids << std::endl;
+
         if (input_ids.empty())
         {
             std::cout << "Tokenization failed." << std::endl;
@@ -202,4 +282,10 @@ int main(int argc, char* argv[])
 
     std::cout << "\n===== mLLM Runtime End =====" << std::endl;
     return 0;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return -1;
+    }
 }

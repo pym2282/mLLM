@@ -1,12 +1,33 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import argparse
+from pathlib import Path
 
-MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-SAVE_PATH = "./models/TinyLlama"
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
 
-tokenizer.save_pretrained(SAVE_PATH)
-model.save_pretrained(SAVE_PATH)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-name", default="TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+    parser.add_argument("--save-path", type=Path, default=Path("./models/TinyLlama"))
+    parser.add_argument("--trust-remote-code", action="store_true")
+    return parser.parse_args()
 
-print("Download complete!")
+
+def main() -> None:
+    args = parse_args()
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name,
+        trust_remote_code=args.trust_remote_code,
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name,
+        trust_remote_code=args.trust_remote_code,
+    )
+
+    tokenizer.save_pretrained(args.save_path)
+    model.save_pretrained(args.save_path)
+
+    print(f"Download complete: {args.save_path}")
+
+
+if __name__ == "__main__":
+    main()

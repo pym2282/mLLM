@@ -40,6 +40,11 @@ namespace mllm
 
         std::string GetModelType() const override;
 
+        void SetParityMode(bool enabled) override;
+
+        void SetParityReferenceDir(
+            const std::string& path) override;
+
     private:
         bool LoadConfig(
             const std::string& config_path);
@@ -77,5 +82,8 @@ namespace mllm
             kv_caches_;
 
         bool is_loaded_ = false;
+        bool parity_mode_ = false;
+        std::string parity_reference_dir_ =
+            "../scripts/parity";
     };
 }

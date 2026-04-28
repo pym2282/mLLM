@@ -16,6 +16,11 @@ namespace mllm
     class SafeTensorTensorLoader
     {
     public:
+        static void SetVerbose(bool enabled)
+        {
+            verbose_ = enabled;
+        }
+
         // Actual safetensors tensor byte loading.
         // Decodes dtype → torch::Tensor. Currently supports BF16 / F16 / F32.
         // Buffer bytes are copied into an owning tensor via clone(), so the
@@ -91,7 +96,7 @@ namespace mllm
                 sizeof(uint64_t)
             );
 
-            if (header_size == 0)
+            if (!file || header_size == 0)
             {
                 throw std::runtime_error(
                     "Invalid safetensors header size: " +
@@ -134,6 +139,14 @@ namespace mllm
                 begin,
                 std::ios::beg
             );
+
+            if (!file)
+            {
+                throw std::runtime_error(
+                    "Failed to seek tensor bytes: " +
+                    tensor_name
+                );
+            }
 
             std::vector<char> buffer(
                 static_cast<size_t>(byte_size)
@@ -185,19 +198,24 @@ namespace mllm
                         .dtype(dtype)
                 ).clone();
 
-            std::cout
-                << "[SafeTensorTensorLoader] Loaded tensor: "
-                << tensor_name
-                << " | file=" << file_path
-                << " | dtype=" << meta.dtype
-                << " | bytes=" << byte_size
-                << " | shape=" << tensor.sizes()
-                << std::endl;
+            if (verbose_)
+            {
+                std::cout
+                    << "[SafeTensorTensorLoader] Loaded tensor: "
+                    << tensor_name
+                    << " | file=" << file_path
+                    << " | dtype=" << meta.dtype
+                    << " | bytes=" << byte_size
+                    << " | shape=" << tensor.sizes()
+                    << std::endl;
+            }
 
             return tensor;
         }
 
     private:
+        inline static bool verbose_ = false;
+
         static torch::ScalarType ResolveDtype(const std::string& name)
         {
             if (name == "BF16") return torch::kBFloat16;

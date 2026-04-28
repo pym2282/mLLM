@@ -21,7 +21,7 @@ namespace mllm
 
         std::vector<int64_t> Encode(
             const std::string& text
-        ) override;
+        ) const override;
 
         std::string Decode(
             const std::vector<int64_t>& tokens

@@ -1,115 +1,148 @@
+import argparse
 import os
-import subprocess
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 
-def run_cpp():
-    # LibTorch DLL 경로 등록
-    os.environ["PATH"] = (
-        r"C:\libtorch\lib;"
-        + os.environ["PATH"]
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_QWEN_PATH = PROJECT_ROOT / "models" / "Qwen3-8B-FP16"
+
+
+def find_exe(build_dir: Path, exe: Path | None) -> Path:
+    if exe is not None:
+        if exe.exists():
+            return exe.resolve()
+        raise RuntimeError(f"Executable not found: {exe}")
+
+    for candidate in [
+        build_dir / "Release" / "mLLM.exe",
+        build_dir / "mLLM.exe",
+    ]:
+        if candidate.exists():
+            return candidate.resolve()
+
+    raise RuntimeError(
+        f"Executable not found under {build_dir}\n"
+        f"Build with: cmake --build {build_dir} --config Release"
     )
 
-    # regression_test.py 기준으로 프로젝트 루트 계산
-    # scripts/regression_test.py -> parent.parent = mLLM/
-    project_root = Path(__file__).resolve().parent.parent
-    build_dir = project_root / "cmake-build-release"
 
-    exe_path = build_dir / "Release" / "mLLM.exe"
-
-    if not exe_path.exists():
-        # CLion release layout fallback
-        exe_path = build_dir / "mLLM.exe"
-
-    if not exe_path.exists():
-        raise RuntimeError(
-            f"Executable not found: {exe_path}\n"
-            f"Build with: cmake --build cmake-build-release --config Release"
-        )
-
-    # 반드시 build 폴더에서 실행해야
-    # ../models/TinyLlama 경로가 정상 동작함
+def run_checked(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        [str(exe_path), "--parity"],
+        cmd,
         capture_output=True,
         text=True,
-        cwd=str(build_dir)
+        cwd=str(cwd),
     )
 
     if result.returncode != 0:
-        print("===== C++ STDOUT =====")
+        print("===== STDOUT =====")
         print(result.stdout)
-
-        print("===== C++ STDERR =====")
+        print("===== STDERR =====")
         print(result.stderr)
-
         raise RuntimeError(
-            f"C++ runtime execution failed "
-            f"(code={result.returncode})"
+            f"Command failed with code {result.returncode}: {' '.join(cmd)}"
         )
 
-    return result.stdout
+    return result
 
 
-def run_python_reference():
-    project_root = Path(__file__).resolve().parent.parent
+def run_tokenizer_suite(args: argparse.Namespace, exe: Path, model_path: Path) -> None:
+    print("Running tokenizer parity...")
+    result = run_checked(
+        [
+            args.python,
+            "scripts/tokenizer_parity_test.py",
+            "--exe",
+            str(exe),
+            "--model-path",
+            str(model_path),
+        ],
+        PROJECT_ROOT,
+    )
+    print(result.stdout)
 
-    result = subprocess.run(
-        ["python", "scripts/verify_full_forward.py"],
-        capture_output=True,
-        text=True,
-        cwd=str(project_root)
+
+def run_qwen_forward_suite(args: argparse.Namespace, exe: Path, model_path: Path) -> None:
+    print("Running Qwen forward parity...")
+
+    if args.libtorch_dir is not None:
+        os.environ["PATH"] = str(args.libtorch_dir) + os.pathsep + os.environ["PATH"]
+
+    result = run_checked(
+        [
+            str(exe),
+            str(model_path),
+            "--parity",
+            "--parity-dir",
+            str(args.parity_dir.resolve()),
+        ],
+        exe.parent,
     )
 
-    if result.returncode != 0:
-        print("===== PYTHON STDOUT =====")
-        print(result.stdout)
-
-        print("===== PYTHON STDERR =====")
-        print(result.stderr)
-
-        raise RuntimeError(
-            f"Python reference execution failed "
-            f"(code={result.returncode})"
-        )
-
-    return result.stdout
+    argmax = parse_argmax(result.stdout)
+    print(result.stdout)
+    print(f"Qwen C++ argmax: {argmax}")
 
 
-def parse_argmax(output):
+def parse_argmax(output: str) -> int:
     match = re.search(
         r"argmax token_id[:=]\s*(\d+)",
-        output
+        output,
     )
 
     if not match:
-        raise RuntimeError(
-            "Failed to parse argmax token_id"
-        )
+        raise RuntimeError("Failed to parse argmax token_id")
 
     return int(match.group(1))
 
 
-def main():
-    print("Running C++ runtime...")
-    cpp_output = run_cpp()
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=DEFAULT_QWEN_PATH,
+    )
+    parser.add_argument(
+        "--build-dir",
+        type=Path,
+        default=PROJECT_ROOT / "cmake-build-release",
+    )
+    parser.add_argument("--exe", type=Path, default=None)
+    parser.add_argument("--python", default=sys.executable)
+    parser.add_argument(
+        "--libtorch-dir",
+        type=Path,
+        default=Path(r"C:\libtorch\lib"),
+    )
+    parser.add_argument(
+        "--parity-dir",
+        type=Path,
+        default=PROJECT_ROOT / "scripts" / "parity",
+    )
+    parser.add_argument(
+        "--suite",
+        choices=["all", "tokenizer", "qwen-forward"],
+        default="all",
+    )
+    return parser.parse_args()
 
-    print("Running Python HF reference...")
-    py_output = run_python_reference()
 
-    cpp_argmax = parse_argmax(cpp_output)
-    py_argmax = parse_argmax(py_output)
+def main() -> None:
+    args = parse_args()
+    exe = find_exe(args.build_dir, args.exe)
+    model_path = args.model_path.resolve()
 
-    print(f"C++ argmax: {cpp_argmax}")
-    print(f"Python argmax: {py_argmax}")
+    if args.suite in ("all", "tokenizer"):
+        run_tokenizer_suite(args, exe, model_path)
 
-    if cpp_argmax != py_argmax:
-        print("\nFAIL: argmax mismatch")
-        sys.exit(1)
+    if args.suite in ("all", "qwen-forward"):
+        run_qwen_forward_suite(args, exe, model_path)
 
-    print("\nPASS: forward parity verified")
+    print("PASS: regression suite completed")
 
 
 if __name__ == "__main__":

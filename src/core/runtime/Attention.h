@@ -50,6 +50,27 @@ namespace mllm
             auto k = Linear::Forward(hidden, w_k);
             auto v = Linear::Forward(hidden, w_v);
 
+            q = q.view({
+                q.size(0),
+                q.size(1),
+                num_heads,
+                head_dim
+            }).transpose(1, 2);
+
+            k = k.view({
+                k.size(0),
+                k.size(1),
+                num_kv_heads,
+                head_dim
+            }).transpose(1, 2);
+
+            v = v.view({
+                v.size(0),
+                v.size(1),
+                num_kv_heads,
+                head_dim
+            }).transpose(1, 2);
+
             return ForwardProjected(
                 q,
                 k,

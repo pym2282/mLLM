@@ -48,10 +48,17 @@ namespace mllm
             auto x_f32 = x.to(torch::kFloat32);
             auto w_f32 = weight.to(torch::kFloat32);
 
-            auto variance = x_f32.pow(2).mean(-1, /*keepdim=*/true);
-            auto x_norm = x_f32 * torch::rsqrt(variance + eps);
+            auto variance =
+                x_f32.pow(2).mean(-1, true);
 
-            auto out = w_f32 * x_norm;
+            auto x_norm =
+                x_f32 * torch::rsqrt(
+                    variance + eps
+                );
+
+            // weight multiply timing 수정
+            auto out =
+                x_norm * weight.to(torch::kFloat32);
 
             return out.to(input_dtype);
         }

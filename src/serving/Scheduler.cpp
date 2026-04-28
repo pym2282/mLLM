@@ -16,6 +16,9 @@ namespace mllm
 
     void Scheduler::Start()
     {
+        if (running_)
+            return;
+
         running_ = true;
         worker_ = std::thread(&Scheduler::RunLoop, this);
     }

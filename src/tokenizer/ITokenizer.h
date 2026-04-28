@@ -17,7 +17,7 @@ namespace mllm
 
         virtual std::vector<int64_t> Encode(
             const std::string& text
-        ) = 0;
+        ) const = 0;
 
         virtual std::string Decode(
             const std::vector<int64_t>& tokens

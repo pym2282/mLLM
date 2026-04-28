@@ -3,6 +3,7 @@
 #include "models/base/IModelRunner.h"
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <nlohmann/json.hpp>
 
 namespace mllm
@@ -59,6 +60,40 @@ namespace mllm
             {
                 out_config.rope_theta =
                     j["rope_parameters"].value("rope_theta", 10000.0f);
+            }
+
+            auto invalid = [](int v) { return v <= 0; };
+            if (invalid(out_config.hidden_size) ||
+                invalid(out_config.num_layers) ||
+                invalid(out_config.num_attention_heads) ||
+                invalid(out_config.num_key_value_heads) ||
+                invalid(out_config.vocab_size) ||
+                invalid(out_config.intermediate_size) ||
+                invalid(out_config.head_dim))
+            {
+                std::cerr << "[ConfigLoader] Invalid config: required numeric fields must be > 0" << std::endl;
+                return false;
+            }
+
+            if (out_config.hidden_size !=
+                out_config.num_attention_heads * out_config.head_dim)
+            {
+                std::cerr << "[ConfigLoader] Invalid config: hidden_size != num_attention_heads * head_dim" << std::endl;
+                return false;
+            }
+
+            if (out_config.num_attention_heads %
+                out_config.num_key_value_heads != 0)
+            {
+                std::cerr << "[ConfigLoader] Invalid config: attention heads must be divisible by key/value heads" << std::endl;
+                return false;
+            }
+
+            if (out_config.rope_theta <= 0.0f ||
+                out_config.rms_norm_eps <= 0.0f)
+            {
+                std::cerr << "[ConfigLoader] Invalid config: rope_theta and rms_norm_eps must be > 0" << std::endl;
+                return false;
             }
 
             std::cout << "[ConfigLoader] Config parsed successfully" << std::endl;

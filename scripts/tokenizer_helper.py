@@ -1,32 +1,34 @@
 import sys
+import argparse
 from pathlib import Path
 from transformers import AutoTokenizer
 
 sys.stdout.reconfigure(encoding="utf-8")
 
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-path", type=Path, default=Path(__file__).resolve().parent.parent / "models" / "TinyLlama")
+    sub = parser.add_subparsers(dest="mode", required=True)
+    enc = sub.add_parser("encode")
+    enc.add_argument("text")
+    dec = sub.add_parser("decode")
+    dec.add_argument("ids", nargs="+", type=int)
+    return parser.parse_args()
+
+
 def main():
-    if len(sys.argv) < 3:
-        print("usage:")
-        print('python tokenizer_helper.py encode "hello world"')
-        print("python tokenizer_helper.py decode 1 22172")
-        return
-
-    mode = sys.argv[1]
-
-    script_dir = Path(__file__).resolve().parent
-    model_dir = script_dir.parent / "models" / "TinyLlama"
-
+    args = parse_args()
     tokenizer = AutoTokenizer.from_pretrained(
-        str(model_dir),
+        str(args.model_path),
         use_fast=True,
-        local_files_only=True
+        local_files_only=True,
+        trust_remote_code=True,
     )
 
-    if mode == "encode":
-        text = sys.argv[2]
-
+    if args.mode == "encode":
         token_ids = tokenizer.encode(
-            text,
+            args.text,
             add_special_tokens=True
         )
 
@@ -37,20 +39,13 @@ def main():
         )
         return
 
-    if mode == "decode":
-        token_ids = list(
-            map(int, sys.argv[2:])
-        )
-
+    if args.mode == "decode":
         text = tokenizer.decode(
-            token_ids,
+            args.ids,
             skip_special_tokens=True
         )
 
         print(text)
-        return
-
-    print("unknown mode:", mode)
 
 
 if __name__ == "__main__":

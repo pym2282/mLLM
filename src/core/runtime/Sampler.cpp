@@ -2,6 +2,8 @@
 
 #include "Sampler.h"
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <iostream>
 
@@ -61,6 +63,23 @@ namespace mllm
             );
         }
 
+        if (logits.size(0) <= 0)
+        {
+            throw std::runtime_error("Sampler received empty logits.");
+        }
+
+        if (!std::isfinite(temperature))
+        {
+            throw std::runtime_error("Sampler temperature must be finite.");
+        }
+
+        if (!std::isfinite(top_p) || top_p <= 0.0f)
+        {
+            throw std::runtime_error("Sampler top_p must be in (0, 1].");
+        }
+
+        top_p = std::min(top_p, 1.0f);
+
         // --------------------------------
         // repetition penalty
         // --------------------------------
@@ -89,11 +108,6 @@ namespace mllm
                     -1
                 ).item<int64_t>();
 
-            std::cout
-                << "[Sampler] greedy token = "
-                << next_token
-                << std::endl;
-
             return next_token;
         }
 
@@ -113,6 +127,11 @@ namespace mllm
 
         if (top_k > 0)
         {
+            top_k = std::min<int64_t>(
+                top_k,
+                logits.size(0)
+            );
+
             auto topk =
                 torch::topk(
                     probs,
@@ -131,9 +150,13 @@ namespace mllm
                 std::get<0>(topk)
             );
 
-            probs =
-                filtered_probs /
-                filtered_probs.sum();
+            auto denom = filtered_probs.sum();
+            if (denom.item<float>() <= 0.0f)
+            {
+                throw std::runtime_error("Sampler top-k filtering removed all probability mass.");
+            }
+
+            probs = filtered_probs / denom;
         }
 
         // --------------------------------
@@ -183,9 +206,13 @@ namespace mllm
                 sorted_probs
             );
 
-            probs =
-                filtered_probs /
-                filtered_probs.sum();
+            auto denom = filtered_probs.sum();
+            if (denom.item<float>() <= 0.0f)
+            {
+                throw std::runtime_error("Sampler top-p filtering removed all probability mass.");
+            }
+
+            probs = filtered_probs / denom;
         }
 
         // --------------------------------
@@ -200,11 +227,6 @@ namespace mllm
 
         int64_t sampled_token =
             next_token.item<int64_t>();
-
-        std::cout
-            << "[Sampler] sampled token = "
-            << sampled_token
-            << std::endl;
 
         return sampled_token;
     }

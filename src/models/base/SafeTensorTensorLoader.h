@@ -218,28 +218,32 @@ namespace mllm
 
         static torch::ScalarType ResolveDtype(const std::string& name)
         {
-            if (name == "BF16") return torch::kBFloat16;
-            if (name == "F16")  return torch::kFloat16;
-            if (name == "F32")  return torch::kFloat32;
-            if (name == "F64")  return torch::kFloat64;
-            if (name == "I32")  return torch::kInt32;
-            if (name == "I64")  return torch::kInt64;
-            if (name == "U8")   return torch::kUInt8;
-            if (name == "I8")   return torch::kInt8;
+            if (name == "BF16")     return torch::kBFloat16;
+            if (name == "F16")      return torch::kFloat16;
+            if (name == "F32")      return torch::kFloat32;
+            if (name == "F64")      return torch::kFloat64;
+            if (name == "I32")      return torch::kInt32;
+            if (name == "I64")      return torch::kInt64;
+            if (name == "U8")       return torch::kUInt8;
+            if (name == "I8")       return torch::kInt8;
+            if (name == "F8_E4M3") return torch::kFloat8_e4m3fn;
+            if (name == "F8_E5M2") return torch::kFloat8_e5m2;
 
             throw std::runtime_error("Unsupported safetensors dtype: " + name);
         }
 
         static size_t DtypeSize(const std::string& name)
         {
-            if (name == "BF16") return 2;
-            if (name == "F16")  return 2;
-            if (name == "F32")  return 4;
-            if (name == "F64")  return 8;
-            if (name == "I32")  return 4;
-            if (name == "I64")  return 8;
-            if (name == "U8")   return 1;
-            if (name == "I8")   return 1;
+            if (name == "BF16")     return 2;
+            if (name == "F16")      return 2;
+            if (name == "F32")      return 4;
+            if (name == "F64")      return 8;
+            if (name == "I32")      return 4;
+            if (name == "I64")      return 8;
+            if (name == "U8")       return 1;
+            if (name == "I8")       return 1;
+            if (name == "F8_E4M3") return 1;
+            if (name == "F8_E5M2") return 1;
 
             throw std::runtime_error("Unsupported safetensors dtype: " + name);
         }

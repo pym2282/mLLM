@@ -6,6 +6,12 @@
 
 namespace mllm
 {
+    struct Message
+    {
+        std::string role;    // "system", "user", "assistant"
+        std::string content;
+    };
+
     class ITokenizer
     {
     public:
@@ -29,6 +35,18 @@ namespace mllm
 
         // Strip <think>...</think> block from decoded text before display.
         virtual std::string StripThinkingBlock(const std::string& text) const { return text; }
+
+        virtual std::string BuildPromptFromMessages(
+                const std::vector<Message>& messages,
+                bool enable_thinking = false
+        ) const
+        {
+            std::string result;
+            for (const auto& m : messages)
+                result += m.role + ": " + m.content + "\n";
+            result += "assistant: ";
+            return result;
+        }
 
         virtual std::string BuildChatPrompt(
                 const std::string& system_prompt,

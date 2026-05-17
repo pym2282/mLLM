@@ -34,6 +34,15 @@ namespace mllm
         torch::Tensor w_gate;
         torch::Tensor w_up;
         torch::Tensor w_down;
+
+        // FP8 scale tensors (undefined for FP16/BF16 models)
+        torch::Tensor w_q_scale;
+        torch::Tensor w_k_scale;
+        torch::Tensor w_v_scale;
+        torch::Tensor w_o_scale;
+        torch::Tensor w_gate_scale;
+        torch::Tensor w_up_scale;
+        torch::Tensor w_down_scale;
     };
 
     class TransformerBlock

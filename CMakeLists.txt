@@ -28,12 +28,20 @@ add_executable(mLLM
 
         # serving
         src/serving/Scheduler.cpp
+        src/serving/HttpServer.cpp
 )
 
 target_precompile_headers(
         mLLM
         PRIVATE
         src/pch.h
+)
+
+# httplib.h manages its own Windows socket include order; skip the PCH so
+# torch's transitive <windows.h> doesn't pull in winsock 1.x first.
+set_source_files_properties(
+        src/serving/HttpServer.cpp
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
 target_include_directories(mLLM PRIVATE
@@ -44,6 +52,7 @@ target_include_directories(mLLM PRIVATE
 
 target_link_libraries(mLLM PRIVATE
         ${TORCH_LIBRARIES}
+        $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
 add_custom_command(

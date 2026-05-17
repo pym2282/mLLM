@@ -10,6 +10,8 @@
 #include "models/base/GenerateOptions.h"
 #include "models/base/GenerateResult.h"
 #include "tokenizer/ITokenizer.h"
+#include "serving/Scheduler.h"
+#include "serving/HttpServer.h"
 
 // Trim history from the front when it exceeds this many tokens.
 constexpr size_t MAX_CONTEXT_TOKENS = 2048;
@@ -112,6 +114,40 @@ int main(int argc, char* argv[])
             model_path,
             ParseOptionValue(argc, argv, "--parity-dir", DEFAULT_PARITY_DIR)
         );
+    }
+
+    // --------------------------------
+    // --serve: start HTTP inference server
+    // --------------------------------
+    if (HasFlag(argc, argv, "--serve"))
+    {
+        const int port = std::stoi(
+            ParseOptionValue(argc, argv, "--port", "8080"));
+
+        auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+
+        if (!bundle.runner->Load(model_path))
+        {
+            std::cerr << "Failed to load model." << std::endl;
+            return -1;
+        }
+
+        if (!bundle.tokenizer->Load(model_path))
+        {
+            std::cerr << "Failed to load tokenizer." << std::endl;
+            return -1;
+        }
+
+        bundle.runner->InitKVCache(1, bundle.runner->GetConfig().max_position_embeddings);
+
+        mllm::Scheduler scheduler(*bundle.runner);
+        scheduler.Start();
+
+        mllm::HttpServer server(scheduler, *bundle.tokenizer, port);
+        server.Run();      // blocks; Ctrl-C is the only exit signal in v1 (no SIGINT handler)
+
+        scheduler.Stop();
+        return 0;
     }
 
     // --------------------------------

@@ -424,6 +424,26 @@ namespace mllm
         return decoded;
     }
 
+    std::string QwenTokenizer::StripThinkingBlock(const std::string& text) const
+    {
+        const std::string open  = "<think>";
+        const std::string close = "</think>";
+
+        const size_t start = text.find(open);
+        const size_t end   = text.find(close);
+
+        if (start == std::string::npos || end == std::string::npos || end < start)
+            return text;
+
+        std::string result = text;
+        result.erase(start, end + close.size() - start);
+
+        const size_t first = result.find_first_not_of("\n\r ");
+        if (first == std::string::npos)
+            return {};
+        return result.substr(first);
+    }
+
     int64_t QwenTokenizer::GetEOSTokenId() const
     {
         const std::vector<std::string> candidates =

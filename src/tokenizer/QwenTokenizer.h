@@ -43,6 +43,8 @@ namespace mllm
 
         bool SupportsThinking() const override { return true; }
 
+        std::string StripThinkingBlock(const std::string& text) const override;
+
     protected:
         std::string PreTokenize(
             const std::string& text

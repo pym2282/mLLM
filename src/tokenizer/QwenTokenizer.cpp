@@ -310,7 +310,8 @@ namespace mllm
 
     std::string QwenTokenizer::BuildChatPrompt(
         const std::string& system_prompt,
-        const std::string& user_prompt
+        const std::string& user_prompt,
+        bool enable_thinking
     ) const
     {
         std::string prompt;
@@ -323,13 +324,16 @@ namespace mllm
         prompt += user_prompt;
         prompt += "\n<|im_end|>\n";
 
-        prompt += "<|im_start|>assistant\n\n";
+        prompt += "<|im_start|>assistant\n";
+        if (!enable_thinking)
+            prompt += "<think>\n\n</think>\n";
 
         return prompt;
     }
 
     std::string QwenTokenizer::BuildNextUserTurn(
-        const std::string& user_prompt
+        const std::string& user_prompt,
+        bool enable_thinking
     ) const
     {
         std::string s;
@@ -338,6 +342,8 @@ namespace mllm
         s += user_prompt;
         s += "\n<|im_end|>\n";
         s += "<|im_start|>assistant\n";
+        if (!enable_thinking)
+            s += "<think>\n\n</think>\n";
         return s;
     }
 

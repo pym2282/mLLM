@@ -233,13 +233,14 @@ int main(int argc, char* argv[])
     // --------------------------------
 
     mllm::GenerateOptions options;
-    options.max_new_tokens     = 16;
+    options.max_new_tokens     = 256;
     options.temperature        = 0.0f;
     options.top_k              = 1;
     options.top_p              = 1.0f;
     options.use_greedy         = true;
     options.repetition_penalty = 1.0f;
     options.eos_token_id       = bundle.tokenizer->GetEOSTokenId();
+    options.enable_thinking    = false;
 
     std::cout
         << "[GenerateOptions]"
@@ -278,14 +279,14 @@ int main(int argc, char* argv[])
         if (first_turn)
         {
             const std::string prompt =
-                bundle.tokenizer->BuildChatPrompt(SYSTEM_PROMPT, user_text);
+                bundle.tokenizer->BuildChatPrompt(SYSTEM_PROMPT, user_text, options.enable_thinking);
             history_ids = bundle.tokenizer->Encode(prompt);
             first_turn = false;
         }
         else
         {
             const std::string cont =
-                bundle.tokenizer->BuildNextUserTurn(user_text);
+                bundle.tokenizer->BuildNextUserTurn(user_text, options.enable_thinking);
             const auto cont_ids = bundle.tokenizer->Encode(cont);
             history_ids.insert(history_ids.end(), cont_ids.begin(), cont_ids.end());
         }

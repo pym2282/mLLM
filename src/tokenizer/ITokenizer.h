@@ -27,7 +27,8 @@ namespace mllm
 
         virtual std::string BuildChatPrompt(
                 const std::string& system_prompt,
-                const std::string& user_prompt
+                const std::string& user_prompt,
+                bool enable_thinking = false
         ) const
         {
             return system_prompt + "\n\nUser: " +
@@ -38,7 +39,8 @@ namespace mllm
         // Returns the text to append for a follow-up user turn after an
         // assistant response has already been appended to the token history.
         virtual std::string BuildNextUserTurn(
-                const std::string& user_prompt
+                const std::string& user_prompt,
+                bool enable_thinking = false
         ) const
         {
             return "\n\nUser: " + user_prompt + "\nAssistant: ";

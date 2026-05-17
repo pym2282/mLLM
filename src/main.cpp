@@ -233,7 +233,7 @@ int main(int argc, char* argv[])
     // --------------------------------
 
     mllm::GenerateOptions options;
-    options.max_new_tokens     = 256;
+    options.max_new_tokens     = 1024;
     options.temperature        = 0.0f;
     options.top_k              = 1;
     options.top_p              = 1.0f;

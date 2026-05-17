@@ -27,6 +27,9 @@ namespace mllm
 
         virtual bool SupportsThinking() const { return false; }
 
+        // Strip <think>...</think> block from decoded text before display.
+        virtual std::string StripThinkingBlock(const std::string& text) const { return text; }
+
         virtual std::string BuildChatPrompt(
                 const std::string& system_prompt,
                 const std::string& user_prompt,

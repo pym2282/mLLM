@@ -19,11 +19,13 @@ namespace mllm
 
         std::string BuildChatPrompt(
             const std::string& system_prompt,
-            const std::string& user_prompt
+            const std::string& user_prompt,
+            bool enable_thinking = false
         ) const override;
 
         std::string BuildNextUserTurn(
-            const std::string& user_prompt
+            const std::string& user_prompt,
+            bool enable_thinking = false
         ) const override;
 
         // special token handling 추가

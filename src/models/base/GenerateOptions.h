@@ -26,5 +26,8 @@ namespace mllm
 
         // each inner vector is one stop sequence; generation halts on any match
         std::vector<std::vector<int64_t>> stop_sequence_ids;
+
+        // Qwen3: false inserts <think></think> prefix so model skips reasoning
+        bool enable_thinking = false;
     };
 }

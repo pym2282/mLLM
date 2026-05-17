@@ -25,6 +25,8 @@ namespace mllm
 
         virtual int64_t GetEOSTokenId() const = 0;
 
+        virtual bool SupportsThinking() const { return false; }
+
         virtual std::string BuildChatPrompt(
                 const std::string& system_prompt,
                 const std::string& user_prompt,

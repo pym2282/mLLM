@@ -109,6 +109,7 @@ namespace mllm
             opts.use_greedy = body["use_greedy"].get<bool>();
         if (body.contains("repetition_penalty") && body["repetition_penalty"].is_number())
             opts.repetition_penalty = body["repetition_penalty"].get<float>();
+        opts.enable_thinking = impl.tokenizer.SupportsThinking();
         if (body.contains("enable_thinking") && body["enable_thinking"].is_boolean())
             opts.enable_thinking = body["enable_thinking"].get<bool>();
 

@@ -51,6 +51,10 @@ namespace mllm
         torch::Tensor& LoadWeight(
             const std::string& name);
 
+        // Returns undefined tensor if name not in tensor_map_
+        torch::Tensor TryLoadWeight(
+            const std::string& name);
+
         void LoadAllWeights();
 
     private:

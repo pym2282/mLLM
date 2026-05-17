@@ -3,13 +3,14 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace mllm
 {
     struct GenerateOptions
     {
-        int max_new_tokens = 32;
+        int max_new_tokens = 512;
 
         float temperature = 1.0f;
 
@@ -29,5 +30,8 @@ namespace mllm
 
         // Qwen3: false inserts <think></think> prefix so model skips reasoning
         bool enable_thinking = false;
+
+        // streaming: called per token; return false to abort generation
+        std::function<bool(int64_t)> on_token;
     };
 }

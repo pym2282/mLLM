@@ -57,7 +57,14 @@ namespace mllm
                 }
             }
 
-            return torch::nn::functional::linear(x, weight, bias);
+            // FP8 weights can't do matmul on sm < 8.9 — upcast to input dtype
+            const torch::Tensor& w =
+                (weight.scalar_type() == torch::kFloat8_e4m3fn ||
+                 weight.scalar_type() == torch::kFloat8_e5m2)
+                ? weight.to(x.scalar_type())
+                : weight;
+
+            return torch::nn::functional::linear(x, w, bias);
         }
     };
 }

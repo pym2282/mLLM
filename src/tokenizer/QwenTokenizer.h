@@ -17,6 +17,11 @@ namespace mllm
             const std::string& model_path
         ) override;
 
+        std::string BuildPromptFromMessages(
+            const std::vector<Message>& messages,
+            bool enable_thinking = false
+        ) const override;
+
         std::string BuildChatPrompt(
             const std::string& system_prompt,
             const std::string& user_prompt,

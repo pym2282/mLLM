@@ -5,8 +5,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# LibTorch 경로
-set(Torch_DIR "C:/libtorch/share/cmake/Torch")
+# LibTorch 경로 — CUDA 버전 우선, 없으면 CPU fallback
+if(EXISTS "C:/libtorch-cuda/share/cmake/Torch")
+    set(Torch_DIR "C:/libtorch-cuda/share/cmake/Torch")
+    message(STATUS "Using CUDA LibTorch: C:/libtorch-cuda")
+else()
+    set(Torch_DIR "C:/libtorch/share/cmake/Torch")
+    message(STATUS "Using CPU LibTorch: C:/libtorch")
+endif()
 
 find_package(Torch REQUIRED)
 
@@ -55,13 +61,19 @@ target_link_libraries(mLLM PRIVATE
         $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
+if(EXISTS "C:/libtorch-cuda/share/cmake/Torch")
+    set(LIBTORCH_LIB_DIR "C:/libtorch-cuda/lib")
+else()
+    set(LIBTORCH_LIB_DIR "C:/libtorch/lib")
+endif()
+
 add_custom_command(
         TARGET mLLM
         POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "C:/libtorch/lib"
+        "${LIBTORCH_LIB_DIR}"
         $<TARGET_FILE_DIR:mLLM>
-        COMMENT "Copying LibTorch DLLs..."
+        COMMENT "Copying LibTorch DLLs from ${LIBTORCH_LIB_DIR}..."
 )
 
 if (MSVC)

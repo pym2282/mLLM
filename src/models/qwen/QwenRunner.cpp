@@ -2,11 +2,13 @@
 
 #include "models/qwen/QwenRunner.h"
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
+#include "models/base/GenerateResult.h"
+
 #include "models/base/ModelConfigLoader.h"
-#include "models/base/SafeTensorLoader.h"
 #include "models/base/SafeTensorTensorLoader.h"
 
 #include "core/runtime/EmbeddingLookup.h"
@@ -25,12 +27,6 @@ namespace mllm
             if (!LoadConfig(model_path + "/config.json"))
             {
                 std::cerr << "[QwenRunner] Failed to load config" << std::endl;
-                return false;
-            }
-
-            if (!SafeTensorLoader::Exists(model_path))
-            {
-                std::cerr << "[QwenRunner] model.safetensors not found" << std::endl;
                 return false;
             }
 
@@ -277,11 +273,9 @@ namespace mllm
         return logits;
     }
 
-    std::vector<int64_t> QwenRunner::GenerateInternal(
+    GenerateResult QwenRunner::Generate(
         const std::vector<int64_t>& input_ids,
-        const GenerateOptions& options,
-        bool streaming,
-        ITokenizer* tokenizer)
+        const GenerateOptions& options)
     {
         if (!is_loaded_)
         {
@@ -290,14 +284,7 @@ namespace mllm
             );
         }
 
-        if (streaming && tokenizer == nullptr)
-        {
-            throw std::runtime_error(
-                "QwenRunner: tokenizer is null."
-            );
-        }
-
-        std::vector<int64_t> generated;
+        GenerateResult result;
         std::vector<int64_t> current = input_ids;
 
         for (auto& cache : kv_caches_)
@@ -307,6 +294,13 @@ namespace mllm
 
         for (int step = 0; step < options.max_new_tokens; ++step)
         {
+            if (config_.max_position_embeddings > 0 &&
+                (int)current.size() >= config_.max_position_embeddings)
+            {
+                result.finish_reason = FinishReason::Length;
+                break;
+            }
+
             torch::Tensor input_tensor;
 
             if (step == 0)
@@ -350,52 +344,42 @@ namespace mllm
                     options.repetition_penalty
                 );
 
-            generated.push_back(next_token);
+            result.tokens.push_back(next_token);
             current.push_back(next_token);
-
-            if (streaming)
-            {
-                std::cout
-                    << tokenizer->Decode(
-                        std::vector<int64_t>{ next_token }
-                    )
-                    << std::flush;
-            }
 
             if (next_token == options.eos_token_id)
             {
-                if (streaming)
-                {
-                    std::cout << std::endl;
-                }
-
-                std::cout
-                    << "[QwenRunner] EOS detected."
-                    << std::endl;
-
+                result.finish_reason = FinishReason::EOS;
+                std::cout << "[QwenRunner] EOS detected." << std::endl;
                 break;
             }
+
+            bool stop_hit = false;
+            for (const auto& stop_seq : options.stop_sequence_ids)
+            {
+                if (stop_seq.empty()) continue;
+                const size_t n = stop_seq.size();
+                if (current.size() >= n &&
+                    std::equal(stop_seq.begin(), stop_seq.end(),
+                               current.end() - static_cast<ptrdiff_t>(n)))
+                {
+                    result.finish_reason = FinishReason::Stop;
+                    stop_hit = true;
+                    break;
+                }
+            }
+            if (stop_hit) break;
         }
 
-        return generated;
-    }
-
-    std::vector<int64_t> QwenRunner::Generate(
-        const std::vector<int64_t>& input_ids,
-        const GenerateOptions& options)
-    {
-        return GenerateInternal(
-            input_ids,
-            options,
-            false,
-            nullptr
-        );
+        return result;
     }
 
     void QwenRunner::InitKVCache(
         int batch_size,
         int max_seq_len)
     {
+        // Parameters are hints for future pre-allocation; currently caches
+        // grow dynamically via torch::cat in TransformerBlock.
         (void)batch_size;
         (void)max_seq_len;
 

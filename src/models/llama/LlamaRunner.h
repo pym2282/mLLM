@@ -11,8 +11,6 @@
 #include <vector>
 
 #include "models/base/GenerateOptions.h"
-#include "tokenizer/ITokenizer.h"
-
 namespace mllm
 {
     class LlamaRunner : public IModelRunner
@@ -30,16 +28,10 @@ namespace mllm
             const torch::Tensor& attention_mask
         ) override;
 
-        std::vector<int64_t> Generate(
+        GenerateResult Generate(
             const std::vector<int64_t>& input_ids,
             const GenerateOptions& options
         ) override;
-
-        std::vector<int64_t> GenerateStreaming(
-            const std::vector<int64_t>& input_ids,
-            const GenerateOptions& options,
-            ITokenizer* tokenizer
-        );
 
         void InitKVCache(
             int batch_size,

@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "models/base/GenerateOptions.h"
-#include "tokenizer/ITokenizer.h"
 
 namespace mllm
 {
@@ -28,7 +27,7 @@ namespace mllm
             const torch::Tensor& input_ids,
             const torch::Tensor& attention_mask) override;
 
-        std::vector<int64_t> Generate(
+        GenerateResult Generate(
             const std::vector<int64_t>& input_ids,
             const GenerateOptions& options) override;
 
@@ -53,12 +52,6 @@ namespace mllm
             const std::string& name);
 
         void LoadAllWeights();
-
-        std::vector<int64_t> GenerateInternal(
-            const std::vector<int64_t>& input_ids,
-            const GenerateOptions& options,
-            bool streaming,
-            ITokenizer* tokenizer);
 
     private:
         ModelConfig config_;

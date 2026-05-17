@@ -3,6 +3,7 @@
 #pragma once
 
 #include "models/base/GenerateOptions.h"
+#include "models/base/GenerateResult.h"
 #include <atomic>
 #include <cstdint>
 #include <future>
@@ -21,10 +22,10 @@ namespace mllm
 
     struct GenerationRequest
     {
-        std::string                        request_id;
-        std::vector<int64_t>               prompt_tokens;
-        GenerateOptions                    options;
-        std::atomic<RequestStatus>         status = RequestStatus::Pending;
-        std::promise<std::vector<int64_t>> result_promise;
+        std::string                    request_id;
+        std::vector<int64_t>           prompt_tokens;
+        GenerateOptions                options;
+        std::atomic<RequestStatus>     status = RequestStatus::Pending;
+        std::promise<GenerateResult>   result_promise;
     };
 }

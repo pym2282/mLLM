@@ -8,6 +8,7 @@
 #include <torch/torch.h>
 
 #include "models/base/GenerateOptions.h"
+#include "models/base/GenerateResult.h"
 
 namespace mllm
 {
@@ -50,7 +51,7 @@ namespace mllm
         virtual std::string GetModelType() const = 0;
 
         // Multi-token generation loop (prefill + decode)
-        virtual std::vector<int64_t> Generate(
+        virtual GenerateResult Generate(
             const std::vector<int64_t>& input_ids,
             const GenerateOptions& options) = 0;
 

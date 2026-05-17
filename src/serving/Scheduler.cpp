@@ -1,6 +1,7 @@
 // src/serving/Scheduler.cpp
 
 #include "serving/Scheduler.h"
+#include "models/base/GenerateResult.h"
 #include <iostream>
 
 namespace mllm
@@ -57,7 +58,7 @@ namespace mllm
 
             try
             {
-                auto output = runner_.Generate(
+                GenerateResult output = runner_.Generate(
                     req->prompt_tokens,
                     req->options
                 );

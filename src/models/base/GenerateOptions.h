@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 namespace mllm
 {
     struct GenerateOptions
@@ -12,10 +15,7 @@ namespace mllm
 
         int top_k = 40;
 
-        // NEW
-        // nucleus sampling
-        // usually 0.8 ~ 0.95
-        // 1.0 = disabled
+        // nucleus sampling — 0.8~0.95 typical; 1.0 = disabled
         float top_p = 0.9f;
 
         bool use_greedy = false;
@@ -23,5 +23,8 @@ namespace mllm
         float repetition_penalty = 1.1f;
 
         int64_t eos_token_id = 2;
+
+        // each inner vector is one stop sequence; generation halts on any match
+        std::vector<std::vector<int64_t>> stop_sequence_ids;
     };
 }

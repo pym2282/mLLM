@@ -1,5 +1,7 @@
 // src/serving/HttpServer.cpp
 
+#include <httplib/httplib.h>  // must be first on Windows (winsock2 before winsock1)
+
 #include "serving/HttpServer.h"
 #include "serving/Scheduler.h"
 #include "serving/GenerationRequest.h"
@@ -7,7 +9,6 @@
 #include "tokenizer/ITokenizer.h"
 #include "models/base/GenerateResult.h"
 
-#include <httplib/httplib.h>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -28,6 +29,8 @@ namespace mllm
 
         Impl(Scheduler& sched, ITokenizer& tok, int p)
             : scheduler(sched), tokenizer(tok), port(p) {}
+
+        void HandleGenerate(const httplib::Request& req, httplib::Response& res);
     };
 
     // ----------------------------------------------------------------
@@ -62,16 +65,16 @@ namespace mllm
     //     "top_p"              : 0.9,              // optional
     //     "use_greedy"         : false,            // optional
     //     "repetition_penalty" : 1.1,              // optional
+    //     "enable_thinking"    : true,             // optional
     //     "stop"               : ["<|im_end|>"]    // optional string list
     //   }
     //
     // Response JSON:
     //   { "text": "...", "finish_reason": "eos|stop|length" }
     // ----------------------------------------------------------------
-    static void HandleGenerate(
+    void HttpServer::Impl::HandleGenerate(
         const httplib::Request& req,
-        httplib::Response&      res,
-        HttpServer::Impl&       impl)
+        httplib::Response&      res)
     {
         nlohmann::json body;
         try
@@ -109,11 +112,11 @@ namespace mllm
             opts.use_greedy = body["use_greedy"].get<bool>();
         if (body.contains("repetition_penalty") && body["repetition_penalty"].is_number())
             opts.repetition_penalty = body["repetition_penalty"].get<float>();
-        opts.enable_thinking = impl.tokenizer.SupportsThinking();
+        opts.enable_thinking = tokenizer.SupportsThinking();
         if (body.contains("enable_thinking") && body["enable_thinking"].is_boolean())
             opts.enable_thinking = body["enable_thinking"].get<bool>();
 
-        opts.eos_token_id = impl.tokenizer.GetEOSTokenId();
+        opts.eos_token_id = tokenizer.GetEOSTokenId();
 
         // Encode stop strings into token-ID sequences
         if (body.contains("stop") && body["stop"].is_array())
@@ -121,13 +124,13 @@ namespace mllm
             for (const auto& s : body["stop"])
             {
                 if (!s.is_string()) continue;
-                const auto ids = impl.tokenizer.Encode(s.get<std::string>());
+                const auto ids = tokenizer.Encode(s.get<std::string>());
                 if (!ids.empty())
                     opts.stop_sequence_ids.push_back(ids);
             }
         }
 
-        auto prompt_ids = impl.tokenizer.Encode(prompt);
+        auto prompt_ids = tokenizer.Encode(prompt);
         if (prompt_ids.empty())
         {
             res.status = 400;
@@ -139,7 +142,7 @@ namespace mllm
 
         // Build and enqueue request
         auto gen_req = std::make_shared<GenerationRequest>();
-        gen_req->request_id   = std::to_string(
+        gen_req->request_id    = std::to_string(
             std::chrono::steady_clock::now().time_since_epoch().count());
         gen_req->prompt_tokens = std::move(prompt_ids);
         gen_req->options       = opts;
@@ -148,7 +151,7 @@ namespace mllm
 
         try
         {
-            impl.scheduler.GetQueue().Push(std::move(gen_req));
+            scheduler.GetQueue().Push(std::move(gen_req));
         }
         catch (const std::exception& e)
         {
@@ -170,7 +173,7 @@ namespace mllm
             return;
         }
 
-        const std::string text = impl.tokenizer.Decode(result.tokens);
+        const std::string text = tokenizer.Decode(result.tokens);
 
         nlohmann::json response{
             {"text",          text},
@@ -193,7 +196,7 @@ namespace mllm
         impl_->svr.Post("/v1/generate",
             [this](const httplib::Request& req, httplib::Response& res)
             {
-                HandleGenerate(req, res, *impl_);
+                impl_->HandleGenerate(req, res);
             });
 
         impl_->svr.Get("/health",

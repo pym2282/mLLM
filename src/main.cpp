@@ -319,10 +319,13 @@ int main(int argc, char* argv[])
 
         std::cout << "\nAssistant: " << assistant_text << std::endl;
 
-        // Append generated tokens so they form context for the next turn
-        history_ids.insert(history_ids.end(),
-                           result.tokens.begin(),
-                           result.tokens.end());
+        // Append generated tokens excluding EOS: BuildNextUserTurn already
+        // adds the turn separator, so keeping EOS would double <|im_end|>.
+        auto hist_end = result.tokens.end();
+        if (!result.tokens.empty() &&
+            result.tokens.back() == static_cast<int64_t>(options.eos_token_id))
+            --hist_end;
+        history_ids.insert(history_ids.end(), result.tokens.begin(), hist_end);
     }
 
     std::cout << "\n===== mLLM Runtime End =====" << std::endl;

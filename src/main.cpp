@@ -20,11 +20,9 @@ static const std::string DEFAULT_MODEL_PATH = "../models/Qwen3-8B-FP16";
 static const std::string DEFAULT_PARITY_DIR = "../scripts/parity";
 
 static const std::string SYSTEM_PROMPT =
-    "You are a concise assistant.\n"
-    "Answer with only the final answer.\n"
-    "Do not explain.\n"
-    "Do not repeat.\n"
-    "One short sentence only.";
+    "You are a helpful assistant.\n"
+    "Always respond in the same language as the user.\n"
+    "Be concise and direct.";
 
 // Extract the first non-flag argument as model path, or return default.
 static std::string ParseModelPath(int argc, char* argv[])

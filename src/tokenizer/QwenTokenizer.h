@@ -22,6 +22,10 @@ namespace mllm
             const std::string& user_prompt
         ) const override;
 
+        std::string BuildNextUserTurn(
+            const std::string& user_prompt
+        ) const override;
+
         // special token handling 추가
         std::vector<int64_t> Encode(
             const std::string& text

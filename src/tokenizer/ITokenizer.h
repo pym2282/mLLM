@@ -34,5 +34,14 @@ namespace mllm
                    user_prompt +
                    "\nAssistant: ";
         }
+
+        // Returns the text to append for a follow-up user turn after an
+        // assistant response has already been appended to the token history.
+        virtual std::string BuildNextUserTurn(
+                const std::string& user_prompt
+        ) const
+        {
+            return "\n\nUser: " + user_prompt + "\nAssistant: ";
+        }
     };
 }

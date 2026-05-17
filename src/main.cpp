@@ -8,12 +8,21 @@
 
 #include "models/base/ModelRunnerFactory.h"
 #include "models/base/GenerateOptions.h"
+#include "models/base/GenerateResult.h"
 #include "tokenizer/ITokenizer.h"
 
-constexpr size_t MAX_HISTORY_CHARS = 8000;
+// Trim history from the front when it exceeds this many tokens.
+constexpr size_t MAX_CONTEXT_TOKENS = 2048;
 
 static const std::string DEFAULT_MODEL_PATH = "../models/Qwen3-8B-FP16";
 static const std::string DEFAULT_PARITY_DIR = "../scripts/parity";
+
+static const std::string SYSTEM_PROMPT =
+    "You are a concise assistant.\n"
+    "Answer with only the final answer.\n"
+    "Do not explain.\n"
+    "Do not repeat.\n"
+    "One short sentence only.";
 
 // Extract the first non-flag argument as model path, or return default.
 static std::string ParseModelPath(int argc, char* argv[])
@@ -38,15 +47,18 @@ static std::string ParseOptionValue(
     {
         const std::string arg = argv[i];
         if (arg == name && i + 1 < argc)
-        {
             return argv[i + 1];
-        }
         if (arg.rfind(prefix, 0) == 0)
-        {
             return arg.substr(prefix.size());
-        }
     }
     return default_value;
+}
+
+static bool HasFlag(int argc, char* argv[], const std::string& flag)
+{
+    for (int i = 1; i < argc; ++i)
+        if (std::string(argv[i]) == flag) return true;
+    return false;
 }
 
 // --parity: fixed forward pass used by regression_test.py
@@ -94,77 +106,65 @@ int main(int argc, char* argv[])
     // --------------------------------
     // --parity
     // --------------------------------
-    for (int i = 1; i < argc; ++i)
+    if (HasFlag(argc, argv, "--parity"))
     {
-        if (std::string(argv[i]) == "--parity")
-            return RunParityCheck(
-                model_path,
-                ParseOptionValue(
-                    argc,
-                    argv,
-                    "--parity-dir",
-                    DEFAULT_PARITY_DIR
-                )
-            );
+        return RunParityCheck(
+            model_path,
+            ParseOptionValue(argc, argv, "--parity-dir", DEFAULT_PARITY_DIR)
+        );
     }
 
     // --------------------------------
     // --tokenize: read one line from stdin and print token IDs
     // --------------------------------
-    for (int i = 1; i < argc; ++i)
+    if (HasFlag(argc, argv, "--tokenize"))
     {
-        if (std::string(argv[i]) == "--tokenize")
+        auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+
+        if (!bundle.tokenizer->Load(model_path))
         {
-            auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+            std::cerr << "Tokenizer load failed." << std::endl;
+            return -1;
+        }
 
-            if (!bundle.tokenizer->Load(model_path))
-            {
-                std::cerr << "Tokenizer load failed." << std::endl;
-                return -1;
-            }
+        std::string text;
+        std::getline(std::cin, text);
 
-            std::string text;
-            std::getline(std::cin, text);
+        const auto ids = bundle.tokenizer->Encode(text);
+        for (size_t j = 0; j < ids.size(); ++j)
+        {
+            if (j > 0) std::cout << ' ';
+            std::cout << ids[j];
+        }
+        std::cout << std::endl;
+        return 0;
+    }
 
+    // --------------------------------
+    // --tokenize-batch: read stdin lines and print one token-ID line per input
+    // --------------------------------
+    if (HasFlag(argc, argv, "--tokenize-batch"))
+    {
+        auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+
+        if (!bundle.tokenizer->Load(model_path))
+        {
+            std::cerr << "Tokenizer load failed." << std::endl;
+            return -1;
+        }
+
+        std::string text;
+        while (std::getline(std::cin, text))
+        {
             const auto ids = bundle.tokenizer->Encode(text);
             for (size_t j = 0; j < ids.size(); ++j)
             {
                 if (j > 0) std::cout << ' ';
                 std::cout << ids[j];
             }
-            std::cout << std::endl;
-            return 0;
+            std::cout << '\n';
         }
-    }
-
-    // --------------------------------
-    // --tokenize-batch: read stdin lines and print one token-ID line per input
-    // --------------------------------
-    for (int i = 1; i < argc; ++i)
-    {
-        if (std::string(argv[i]) == "--tokenize-batch")
-        {
-            auto bundle = mllm::ModelRunnerFactory::Create(model_path);
-
-            if (!bundle.tokenizer->Load(model_path))
-            {
-                std::cerr << "Tokenizer load failed." << std::endl;
-                return -1;
-            }
-
-            std::string text;
-            while (std::getline(std::cin, text))
-            {
-                const auto ids = bundle.tokenizer->Encode(text);
-                for (size_t j = 0; j < ids.size(); ++j)
-                {
-                    if (j > 0) std::cout << ' ';
-                    std::cout << ids[j];
-                }
-                std::cout << '\n';
-            }
-            return 0;
-        }
+        return 0;
     }
 
     // --------------------------------
@@ -197,13 +197,13 @@ int main(int argc, char* argv[])
     // --------------------------------
 
     mllm::GenerateOptions options;
-    options.max_new_tokens    = 16;
-    options.temperature       = 0.0f;
-    options.top_k             = 1;
-    options.top_p             = 1.0f;
-    options.use_greedy        = true;
+    options.max_new_tokens     = 16;
+    options.temperature        = 0.0f;
+    options.top_k              = 1;
+    options.top_p              = 1.0f;
+    options.use_greedy         = true;
     options.repetition_penalty = 1.0f;
-    options.eos_token_id      = bundle.tokenizer->GetEOSTokenId();
+    options.eos_token_id       = bundle.tokenizer->GetEOSTokenId();
 
     std::cout
         << "[GenerateOptions]"
@@ -213,10 +213,13 @@ int main(int argc, char* argv[])
         << std::endl;
 
     // --------------------------------
-    // Persistent Chat History
+    // Token-based conversation history
+    // Each turn appends to history_ids so prior context is visible to the
+    // model. Older tokens are trimmed from the front when the window fills.
     // --------------------------------
 
-    std::string chat_history;
+    std::vector<int64_t> history_ids;
+    bool first_turn = true;
 
     // --------------------------------
     // Interactive CLI
@@ -236,48 +239,55 @@ int main(int argc, char* argv[])
         if (user_text.empty())
             continue;
 
-        chat_history = bundle.tokenizer->BuildChatPrompt(
-            "You are a concise assistant.\n"
-            "Answer with only the final answer.\n"
-            "Do not explain.\n"
-            "Do not repeat.\n"
-            "One short sentence only.",
-            user_text
-        );
+        if (first_turn)
+        {
+            const std::string prompt =
+                bundle.tokenizer->BuildChatPrompt(SYSTEM_PROMPT, user_text);
+            history_ids = bundle.tokenizer->Encode(prompt);
+            first_turn = false;
+        }
+        else
+        {
+            const std::string cont =
+                bundle.tokenizer->BuildNextUserTurn(user_text);
+            const auto cont_ids = bundle.tokenizer->Encode(cont);
+            history_ids.insert(history_ids.end(), cont_ids.begin(), cont_ids.end());
+        }
 
-        std::cout << "\n[Prompt]\n" << chat_history << std::endl;
+        // Trim oldest tokens when the context window is full
+        if (history_ids.size() > MAX_CONTEXT_TOKENS)
+        {
+            const size_t excess = history_ids.size() - MAX_CONTEXT_TOKENS;
+            history_ids.erase(history_ids.begin(), history_ids.begin() + static_cast<ptrdiff_t>(excess));
+            std::cout << "[History trimmed to " << MAX_CONTEXT_TOKENS << " tokens]" << std::endl;
+        }
 
-        auto input_ids = bundle.tokenizer->Encode(chat_history);
+        std::cout << "Input token count: " << history_ids.size() << std::endl;
 
-        std::cout << "\n[Encode]\n" << input_ids << std::endl;
-
-        if (input_ids.empty())
+        if (history_ids.empty())
         {
             std::cout << "Tokenization failed." << std::endl;
             continue;
         }
 
-        std::cout << "Input token count: " << input_ids.size() << std::endl;
+        mllm::GenerateResult result =
+            bundle.runner->Generate(history_ids, options);
 
-        auto generated = bundle.runner->Generate(input_ids, options);
-
-        if (generated.empty())
+        if (result.tokens.empty())
         {
-            std::cout << "Generation failed." << std::endl;
+            std::cout << "Generation produced no tokens." << std::endl;
             continue;
         }
 
-        auto assistant_text = bundle.tokenizer->Decode(generated);
+        const std::string assistant_text =
+            bundle.tokenizer->Decode(result.tokens);
 
         std::cout << "\nAssistant: " << assistant_text << std::endl;
 
-        chat_history += assistant_text + "\n";
-
-        if (chat_history.size() > MAX_HISTORY_CHARS)
-        {
-            chat_history = chat_history.substr(chat_history.size() - MAX_HISTORY_CHARS);
-            std::cout << "[History trimmed]" << std::endl;
-        }
+        // Append generated tokens so they form context for the next turn
+        history_ids.insert(history_ids.end(),
+                           result.tokens.begin(),
+                           result.tokens.end());
     }
 
     std::cout << "\n===== mLLM Runtime End =====" << std::endl;

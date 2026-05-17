@@ -65,30 +65,23 @@ namespace mllm
     private:
         static std::string ReadModelType(const std::string& config_path)
         {
-            try
+            std::ifstream f(config_path);
+            if (!f.is_open())
             {
-                std::ifstream f(config_path);
-                if (!f.is_open())
-                {
-                    throw std::runtime_error(
-                        "Failed to open model config: " + config_path);
-                }
-
-                nlohmann::json j;
-                f >> j;
-
-                if (!j.contains("model_type"))
-                {
-                    throw std::runtime_error(
-                        "Missing model_type in config: " + config_path);
-                }
-
-                return j.value("model_type", "");
+                throw std::runtime_error(
+                    "Failed to open model config: " + config_path);
             }
-            catch (const std::exception&)
+
+            nlohmann::json j;
+            f >> j;
+
+            if (!j.contains("model_type"))
             {
-                throw;
+                throw std::runtime_error(
+                    "Missing model_type in config: " + config_path);
             }
+
+            return j.value("model_type", "");
         }
     };
 }

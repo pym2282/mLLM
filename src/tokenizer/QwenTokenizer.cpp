@@ -328,6 +328,19 @@ namespace mllm
         return prompt;
     }
 
+    std::string QwenTokenizer::BuildNextUserTurn(
+        const std::string& user_prompt
+    ) const
+    {
+        std::string s;
+        s += "<|im_end|>\n";
+        s += "<|im_start|>user\n";
+        s += user_prompt;
+        s += "\n<|im_end|>\n";
+        s += "<|im_start|>assistant\n";
+        return s;
+    }
+
     std::string QwenTokenizer::Decode(
         const std::vector<int64_t>& token_ids
     ) const

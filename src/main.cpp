@@ -240,7 +240,7 @@ int main(int argc, char* argv[])
     options.use_greedy         = true;
     options.repetition_penalty = 1.0f;
     options.eos_token_id       = bundle.tokenizer->GetEOSTokenId();
-    options.enable_thinking    = false;
+    options.enable_thinking    = bundle.tokenizer->SupportsThinking();
 
     std::cout
         << "[GenerateOptions]"

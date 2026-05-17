@@ -41,6 +41,8 @@ namespace mllm
         // Qwen must have correct EOS/BOS handling
         int64_t GetEOSTokenId() const override;
 
+        bool SupportsThinking() const override { return true; }
+
     protected:
         std::string PreTokenize(
             const std::string& text

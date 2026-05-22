@@ -46,11 +46,35 @@ namespace mllm
         bool done_sent   = false;
     };
 
+    // Returns the byte length of the longest valid UTF-8 prefix of s.
+    // BPE byte-level tokens can produce partial multi-byte sequences; this
+    // function ensures we never emit a diff that cuts inside a codepoint.
+    static size_t Utf8SafeLen(const std::string& s)
+    {
+        if (s.empty()) return 0;
+        const size_t n = s.size();
+        // Walk backwards past continuation bytes (10xxxxxx).
+        size_t back = 0;
+        while (back < 3 && back < n &&
+               (static_cast<unsigned char>(s[n - 1 - back]) & 0xC0) == 0x80)
+            ++back;
+        if (back >= n) return 0;
+        const unsigned char lead = static_cast<unsigned char>(s[n - 1 - back]);
+        size_t seq_len;
+        if      ((lead & 0x80) == 0x00) seq_len = 1;
+        else if ((lead & 0xE0) == 0xC0) seq_len = 2;
+        else if ((lead & 0xF0) == 0xE0) seq_len = 3;
+        else if ((lead & 0xF8) == 0xF0) seq_len = 4;
+        else return n - 1 - back; // invalid lead byte — truncate before it
+        // If we have all bytes of this sequence, string is complete.
+        return (back + 1 == seq_len) ? n : n - 1 - back;
+    }
+
     // Mutable decode state used inside on_token (scheduler thread only)
     struct DecodeState
     {
         std::vector<int64_t> acc;
-        std::string          prev;
+        size_t               emitted = 0;  // bytes sent to pipe, always at UTF-8 boundary
     };
 
     struct HttpServer::Impl
@@ -109,7 +133,7 @@ namespace mllm
             {"model",   model_name},
             {"choices", nlohmann::json::array({choice})}
         };
-        return "data: " + obj.dump() + "\n\n";
+        return "data: " + obj.dump(-1, ' ', true) + "\n\n";
     }
 
     // ----------------------------------------------------------------
@@ -124,7 +148,7 @@ namespace mllm
         catch (const std::exception& e)
         {
             res.status = 400;
-            res.set_content(ErrorJson(e.what()).dump(), "application/json");
+            res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
             return;
         }
 
@@ -132,8 +156,8 @@ namespace mllm
         {
             res.status = 400;
             res.set_content(
-                ErrorJson("'prompt' (string) is required").dump(),
-                "application/json");
+                ErrorJson("'prompt' (string) is required").dump(-1, ' ', true),
+                "application/json; charset=utf-8");
             return;
         }
 
@@ -173,8 +197,8 @@ namespace mllm
         {
             res.status = 400;
             res.set_content(
-                ErrorJson("tokenizer produced empty sequence for prompt").dump(),
-                "application/json");
+                ErrorJson("tokenizer produced empty sequence for prompt").dump(-1, ' ', true),
+                "application/json; charset=utf-8");
             return;
         }
 
@@ -190,7 +214,7 @@ namespace mllm
         catch (const std::exception& e)
         {
             res.status = 503;
-            res.set_content(ErrorJson(e.what()).dump(), "application/json");
+            res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
             return;
         }
 
@@ -199,7 +223,7 @@ namespace mllm
         catch (const std::exception& e)
         {
             res.status = 500;
-            res.set_content(ErrorJson(e.what()).dump(), "application/json");
+            res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
             return;
         }
 
@@ -209,7 +233,7 @@ namespace mllm
             {"text",          text},
             {"finish_reason", FinishReasonStr(result.finish_reason)}
         };
-        res.set_content(response.dump(), "application/json");
+        res.set_content(response.dump(-1, ' ', true), "application/json; charset=utf-8");
     }
 
     // ----------------------------------------------------------------
@@ -224,7 +248,7 @@ namespace mllm
         catch (const std::exception& e)
         {
             res.status = 400;
-            res.set_content(ErrorJson(e.what()).dump(), "application/json");
+            res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
             return;
         }
 
@@ -232,8 +256,8 @@ namespace mllm
         {
             res.status = 400;
             res.set_content(
-                ErrorJson("'messages' (array) is required").dump(),
-                "application/json");
+                ErrorJson("'messages' (array) is required").dump(-1, ' ', true),
+                "application/json; charset=utf-8");
             return;
         }
 
@@ -253,8 +277,8 @@ namespace mllm
         {
             res.status = 400;
             res.set_content(
-                ErrorJson("messages array is empty or malformed").dump(),
-                "application/json");
+                ErrorJson("messages array is empty or malformed").dump(-1, ' ', true),
+                "application/json; charset=utf-8");
             return;
         }
 
@@ -278,8 +302,8 @@ namespace mllm
         {
             res.status = 400;
             res.set_content(
-                ErrorJson("tokenizer produced empty sequence").dump(),
-                "application/json");
+                ErrorJson("tokenizer produced empty sequence").dump(-1, ' ', true),
+                "application/json; charset=utf-8");
             return;
         }
 
@@ -297,27 +321,22 @@ namespace mllm
             auto state = std::make_shared<StreamState>();
             auto ds    = std::make_shared<DecodeState>();
 
-            const int64_t eos_id = opts.eos_token_id;
-            ITokenizer&   tok    = tokenizer;
+            const int64_t eos_id  = opts.eos_token_id;
+            ITokenizer*   tok_ptr = &tokenizer;  // raw ptr, safe: tokenizer outlives server
 
-            // on_token: runs on scheduler thread; decodes diff, pushes to pipe
-            opts.on_token = [pipe, ds, &tok, eos_id](int64_t token) -> bool {
+            opts.on_token = [pipe, ds, tok_ptr, eos_id](int64_t token) -> bool {
                 pipe->completion_toks.fetch_add(1, std::memory_order_relaxed);
-
-                if (token != eos_id)
-                {
+                if (token != eos_id) {
                     ds->acc.push_back(token);
-                    std::string new_dec = tok.Decode(ds->acc);
-                    std::string diff    = new_dec.substr(ds->prev.size());
-                    ds->prev            = std::move(new_dec);
-
-                    if (!diff.empty())
-                    {
-                        {
-                            std::lock_guard<std::mutex> lk(pipe->mu);
-                            pipe->diffs.push_back(std::move(diff));
+                    const std::string new_dec = tok_ptr->Decode(ds->acc);
+                    const size_t safe = Utf8SafeLen(new_dec);
+                    if (safe > ds->emitted) {
+                        std::string diff = new_dec.substr(ds->emitted, safe - ds->emitted);
+                        ds->emitted = safe;
+                        if (!diff.empty()) {
+                            { std::lock_guard<std::mutex> lk(pipe->mu); pipe->diffs.push_back(std::move(diff)); }
+                            pipe->cv.notify_one();
                         }
-                        pipe->cv.notify_one();
                     }
                 }
                 return true;
@@ -334,7 +353,7 @@ namespace mllm
             catch (const std::exception& e)
             {
                 res.status = 503;
-                res.set_content(ErrorJson(e.what()).dump(), "application/json");
+                res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
                 return;
             }
 
@@ -428,7 +447,7 @@ namespace mllm
                             }}
                         };
                         const std::string usage_str =
-                            "data: " + usage_obj.dump() + "\n\n";
+                            "data: " + usage_obj.dump(-1, ' ', true) + "\n\n";
                         sink.write(usage_str.data(), usage_str.size());
 
                         // SSE done sentinel
@@ -459,7 +478,7 @@ namespace mllm
         catch (const std::exception& e)
         {
             res.status = 503;
-            res.set_content(ErrorJson(e.what()).dump(), "application/json");
+            res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
             return;
         }
 
@@ -468,7 +487,7 @@ namespace mllm
         catch (const std::exception& e)
         {
             res.status = 500;
-            res.set_content(ErrorJson(e.what()).dump(), "application/json");
+            res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
             return;
         }
 
@@ -500,7 +519,7 @@ namespace mllm
                 {"total_tokens",      prompt_token_count + ctoks}
             }}
         };
-        res.set_content(response.dump(), "application/json");
+        res.set_content(response.dump(-1, ' ', true), "application/json; charset=utf-8");
     }
 
     // ----------------------------------------------------------------
@@ -523,7 +542,7 @@ namespace mllm
 
         impl_->svr.Get("/health",
             [](const httplib::Request&, httplib::Response& res)
-            { res.set_content(R"({"status":"ok"})", "application/json"); });
+            { res.set_content(R"({"status":"ok"})", "application/json; charset=utf-8"); });
     }
 
     HttpServer::~HttpServer() = default;

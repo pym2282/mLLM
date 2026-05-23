@@ -333,10 +333,8 @@ namespace mllm
                     if (safe > ds->emitted) {
                         std::string diff = new_dec.substr(ds->emitted, safe - ds->emitted);
                         ds->emitted = safe;
-                        if (!diff.empty()) {
-                            { std::lock_guard<std::mutex> lk(pipe->mu); pipe->diffs.push_back(std::move(diff)); }
-                            pipe->cv.notify_one();
-                        }
+                        { std::lock_guard<std::mutex> lk(pipe->mu); pipe->diffs.push_back(std::move(diff)); }
+                        pipe->cv.notify_one();
                     }
                 }
                 return true;
@@ -369,14 +367,9 @@ namespace mllm
                 pipe->cv.notify_one();
             }).detach();
 
-            const std::string rid    = request_id;
-            const std::string mname  = model_name;
-            const long long   ts     = created;
-            const int         ptoks  = prompt_token_count;
-
             res.set_chunked_content_provider(
                 "text/event-stream",
-                [pipe, state, rid, mname, ts, ptoks](
+                [pipe, state, request_id, model_name, created, prompt_token_count](
                     size_t /*offset*/,
                     httplib::DataSink& sink) -> bool
                 {
@@ -388,7 +381,7 @@ namespace mllm
                     {
                         state->header_sent = true;
                         const std::string hdr = SseDelta(
-                            rid, mname, ts, {{"role", "assistant"}});
+                            request_id, model_name, created, {{"role", "assistant"}});
                         if (!sink.write(hdr.data(), hdr.size()))
                             return false;
                     }
@@ -419,7 +412,7 @@ namespace mllm
                     if (!diff.empty())
                     {
                         const std::string chunk = SseDelta(
-                            rid, mname, ts, {{"content", diff}});
+                            request_id, model_name, created, {{"content", diff}});
                         return sink.write(chunk.data(), chunk.size());
                     }
 
@@ -427,7 +420,7 @@ namespace mllm
                     {
                         // Final chunk with finish_reason
                         const std::string fin = SseDelta(
-                            rid, mname, ts,
+                            request_id, model_name, created,
                             nlohmann::json::object(),
                             FinishReasonStr(fr));
                         sink.write(fin.data(), fin.size());
@@ -435,15 +428,15 @@ namespace mllm
                         // Usage chunk
                         const int ctoks = pipe->completion_toks.load();
                         nlohmann::json usage_obj = {
-                            {"id",      "chatcmpl-" + rid},
+                            {"id",      "chatcmpl-" + request_id},
                             {"object",  "chat.completion.chunk"},
-                            {"created", ts},
-                            {"model",   mname},
+                            {"created", created},
+                            {"model",   model_name},
                             {"choices", nlohmann::json::array()},
                             {"usage",   {
-                                {"prompt_tokens",     ptoks},
+                                {"prompt_tokens",     prompt_token_count},
                                 {"completion_tokens", ctoks},
-                                {"total_tokens",      ptoks + ctoks}
+                                {"total_tokens",      prompt_token_count + ctoks}
                             }}
                         };
                         const std::string usage_str =
@@ -491,13 +484,8 @@ namespace mllm
             return;
         }
 
-        const std::string text = tokenizer.Decode(result.tokens);
-
-        std::cout
-            << "[HttpServer] Response (" << text.size() << " chars): "
-            << text.substr(0, 200) << std::endl;
-
-        const int ctoks = static_cast<int>(result.tokens.size());
+        const std::string text  = tokenizer.Decode(result.tokens);
+        const int         ctoks = static_cast<int>(result.tokens.size());
         nlohmann::json response = {
             {"id",      "chatcmpl-" + request_id},
             {"object",  "chat.completion"},

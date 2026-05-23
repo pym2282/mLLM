@@ -317,10 +317,10 @@ namespace mllm
         const bool is_decode =
             (S == 1) &&
             !kv_caches_.empty() &&
-            kv_caches_[0].IsInitialized();
+            kv_caches_[0].len > 0;
 
-        // New prefill: clear KV caches from any prior generation so that
-        // multi-turn calls do not torch::cat stale keys/values onto the new context.
+        // New prefill: clear KV caches so stale state doesn't bleed into the
+        // new context window.
         if (!is_decode)
         {
             for (auto& kvc : kv_caches_)
@@ -330,7 +330,7 @@ namespace mllm
         if (is_decode)
         {
             position_ids = torch::tensor(
-                { kv_caches_[0].key.size(2) },
+                { kv_caches_[0].len },
                 torch::TensorOptions()
                     .dtype(torch::kInt64)
                     .device(target_device)
@@ -572,13 +572,27 @@ namespace mllm
         int batch_size,
         int max_seq_len)
     {
-        // Parameters are hints for future pre-allocation; currently caches
-        // grow dynamically via torch::cat in TransformerBlock.
-        (void)batch_size;
-        (void)max_seq_len;
+        // Cap allocation to avoid OOM on GPU: 36 layers × 8 KV heads × 8192 × 128 × 4 B ≈ 1.15 GB
+        const int64_t alloc_seq = std::min(static_cast<int64_t>(max_seq_len), static_cast<int64_t>(8192));
+
+        const auto& ref = weights_.at("model.embed_tokens.weight");
+        const auto device = ref.device();
+        const auto dtype  = ref.scalar_type();
 
         kv_caches_.clear();
         kv_caches_.resize(config_.num_layers);
+
+        for (auto& kvc : kv_caches_)
+        {
+            kvc.Allocate(
+                batch_size,
+                config_.num_key_value_heads,
+                alloc_seq,
+                config_.head_dim,
+                device,
+                dtype
+            );
+        }
     }
 
     const ModelConfig& QwenRunner::GetConfig() const

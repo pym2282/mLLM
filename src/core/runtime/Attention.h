@@ -182,29 +182,38 @@ namespace mllm
 
             if (kv_cache != nullptr)
             {
-                if (kv_cache->IsInitialized())
+                if (kv_cache->capacity > 0)
                 {
-                    // concat on sequence dim
-                    // shape: [B, H, S, D]
-                    k = torch::cat(
-                        {
-                            kv_cache->key,
-                            k
-                        },
-                        2
-                    );
+                    // Pre-allocated path: write into reserved slots, then
+                    // use a view of the full occupied range.
+                    const int64_t old_len = kv_cache->len;
+                    const int64_t new_len = old_len + S;
 
-                    v = torch::cat(
-                        {
-                            kv_cache->value,
-                            v
-                        },
-                        2
-                    );
+                    if (new_len > kv_cache->capacity)
+                    {
+                        throw std::runtime_error(
+                            "KVCache overflow: sequence exceeds pre-allocated capacity."
+                        );
+                    }
+
+                    kv_cache->key.slice(2, old_len, new_len).copy_(k);
+                    kv_cache->value.slice(2, old_len, new_len).copy_(v);
+                    kv_cache->len = new_len;
+
+                    k = kv_cache->key.slice(2, 0, new_len);
+                    v = kv_cache->value.slice(2, 0, new_len);
                 }
-
-                kv_cache->key = k;
-                kv_cache->value = v;
+                else
+                {
+                    // Dynamic path (LlamaRunner legacy)
+                    if (kv_cache->IsInitialized())
+                    {
+                        k = torch::cat({kv_cache->key, k}, 2);
+                        v = torch::cat({kv_cache->value, v}, 2);
+                    }
+                    kv_cache->key = k;
+                    kv_cache->value = v;
+                }
             }
 
             // =====================================================

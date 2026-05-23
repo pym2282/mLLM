@@ -145,7 +145,6 @@ namespace mllm
 
             const auto B = q.size(0);
             const auto S = q.size(2); // IMPORTANT: [B, H, S, D]
-            const auto in_dtype = q.scalar_type();
 
             const int n_rep =
                 num_heads / num_kv_heads;
@@ -241,68 +240,21 @@ namespace mllm
 
             // =====================================================
             // Scaled Dot Product Attention
+            // Prefill (S == total_seq): is_causal=true handles upper-tri mask.
+            // Decode (S == 1):          is_causal=false, all KV positions attended.
             // =====================================================
 
-            auto q_f32 =
-                q.to(torch::kFloat32);
+            const bool is_causal_attn = (S == k.size(2));
 
-            auto k_f32 =
-                k.to(torch::kFloat32);
-
-            const double scale =
-                1.0 /
-                std::sqrt(
-                    static_cast<double>(
-                        head_dim
-                    )
-                );
-
-            auto scores =
-                torch::matmul(
-                    q_f32,
-                    k_f32.transpose(-2, -1)
-                ) * scale;
-
-            // =====================================================
-            // Causal Mask
-            // S==1 (decode step): single query attends to all KV positions
-            // unconditionally, so no mask is needed.
-            // =====================================================
-
-            if (S > 1)
-            {
-                const auto total_seq = k.size(2);
-
-                auto mask =
-                    torch::triu(
-                        torch::full(
-                            {S, total_seq},
-                            -std::numeric_limits<float>::infinity(),
-                            torch::TensorOptions()
-                                .dtype(torch::kFloat32)
-                                .device(q.device())
-                        ),
-                        1 + (total_seq - S)
-                    );
-
-                scores = scores + mask;
-            }
-
-            auto attn =
-                torch::softmax(
-                    scores,
-                    -1
-                ).to(in_dtype);
-
-            // =====================================================
-            // Weighted Sum
-            // =====================================================
-
-            auto out =
-                torch::matmul(
-                    attn,
-                    v
-                );
+            auto out = torch::scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                /*attn_mask=*/{},
+                /*dropout_p=*/0.0,
+                is_causal_attn,
+                /*scale=*/1.0 / std::sqrt(static_cast<double>(head_dim))
+            );
 
             // =====================================================
             // Merge heads

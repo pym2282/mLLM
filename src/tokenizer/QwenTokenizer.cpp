@@ -315,6 +315,19 @@ namespace mllm
     {
         std::string prompt;
 
+        // Inject a default system prompt when none is provided by the caller.
+        bool has_system = false;
+        for (const auto& msg : messages)
+            if (msg.role == "system") { has_system = true; break; }
+
+        if (!has_system)
+        {
+            prompt += "<|im_start|>system\n";
+            prompt += "You are a helpful assistant. "
+                      "Always respond in the same language the user writes in.\n";
+            prompt += "<|im_end|>\n";
+        }
+
         for (const auto& msg : messages)
         {
             prompt += "<|im_start|>";
@@ -478,15 +491,13 @@ namespace mllm
 
         for (const auto& token : candidates)
         {
-            auto it =
-                token_to_id_.find(
-                    token
-                );
+            auto sit = special_tokens_.find(token);
+            if (sit != special_tokens_.end())
+                return sit->second;
 
+            auto it = token_to_id_.find(token);
             if (it != token_to_id_.end())
-            {
                 return it->second;
-            }
         }
 
         std::cerr

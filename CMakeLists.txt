@@ -14,6 +14,12 @@ else()
     message(STATUS "Using CPU LibTorch: C:/libtorch")
 endif()
 
+set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6")
+set(CMAKE_CUDA_COMPILER "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin/nvcc.exe")
+# CUDA 12.6 supports MSVC up to 2022; use VS2022 cl.exe as nvcc host compiler
+set(CMAKE_CUDA_HOST_COMPILER "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe")
+# RTX 3060 = sm_86; skip auto-detection (try_run fails with unsupported MSVC)
+set(TORCH_CUDA_ARCH_LIST "8.6")
 find_package(Torch REQUIRED)
 
 add_executable(mLLM

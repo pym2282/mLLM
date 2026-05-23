@@ -108,6 +108,20 @@ namespace mllm
         if (!scale.defined())
             return w.to(target_dtype);
 
+        if (scale.dim() != 2)
+        {
+            std::cerr << "[DequantizeFP8] FATAL: scale must be 2D, got ndim="
+                      << scale.dim() << " sizes=" << scale.sizes() << std::endl;
+            throw std::runtime_error("DequantizeFP8: scale must be 2D");
+        }
+
+        if (w.size(0) % scale.size(0) != 0 || w.size(1) % scale.size(1) != 0)
+        {
+            std::cerr << "[DequantizeFP8] FATAL: dimension mismatch "
+                      << "w=" << w.sizes() << " scale=" << scale.sizes() << std::endl;
+            throw std::runtime_error("DequantizeFP8: dimension mismatch");
+        }
+
         const int64_t block_out = w.size(0) / scale.size(0);
         const int64_t block_in  = w.size(1) / scale.size(1);
 
@@ -293,6 +307,8 @@ namespace mllm
             );
         }
 
+        torch::NoGradGuard no_grad;
+
         const auto S = input_ids.size(1);
         const auto target_device = weights_.at("model.embed_tokens.weight").device();
 
@@ -302,6 +318,14 @@ namespace mllm
             (S == 1) &&
             !kv_caches_.empty() &&
             kv_caches_[0].IsInitialized();
+
+        // New prefill: clear KV caches from any prior generation so that
+        // multi-turn calls do not torch::cat stale keys/values onto the new context.
+        if (!is_decode)
+        {
+            for (auto& kvc : kv_caches_)
+                kvc.Clear();
+        }
 
         if (is_decode)
         {

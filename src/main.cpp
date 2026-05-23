@@ -6,12 +6,59 @@
 #include <vector>
 #include <exception>
 
+// Windows SEH exception filter: writes a minidump on crash
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+
+static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* ep)
+{
+    HANDLE hFile = CreateFileA(
+        "crash.dmp",
+        GENERIC_WRITE, 0, nullptr,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+
+    if (hFile != INVALID_HANDLE_VALUE)
+    {
+        MINIDUMP_EXCEPTION_INFORMATION mei{};
+        mei.ThreadId          = GetCurrentThreadId();
+        mei.ExceptionPointers = ep;
+        mei.ClientPointers    = FALSE;
+
+        MiniDumpWriteDump(
+            GetCurrentProcess(),
+            GetCurrentProcessId(),
+            hFile,
+            MiniDumpWithFullMemory,
+            &mei, nullptr, nullptr);
+
+        CloseHandle(hFile);
+        std::cerr << "[CRASH] Minidump written to crash.dmp\n";
+    }
+    else
+    {
+        std::cerr << "[CRASH] Could not create crash.dmp (err=" << GetLastError() << ")\n";
+    }
+
+    std::cerr << "[CRASH] Exception code=0x"
+              << std::hex << ep->ExceptionRecord->ExceptionCode
+              << "  addr=0x" << ep->ExceptionRecord->ExceptionAddress
+              << std::dec << "\n";
+    std::cerr.flush();
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 #include "models/base/ModelRunnerFactory.h"
 #include "models/base/GenerateOptions.h"
 #include "models/base/GenerateResult.h"
 #include "tokenizer/ITokenizer.h"
 #include "serving/Scheduler.h"
 #include "serving/HttpServer.h"
+#include "serving/GenerationRequest.h"
 
 // Trim history from the front when it exceeds this many tokens.
 constexpr size_t MAX_CONTEXT_TOKENS = 2048;
@@ -61,6 +108,148 @@ static bool HasFlag(int argc, char* argv[], const std::string& flag)
     return false;
 }
 
+// --stress / --stress-direct: reproduce serve-mode crash without HTTP server.
+//
+//   --stress           : runs via Scheduler worker thread  (= serve path)
+//   --stress-direct    : calls Generate() on main thread   (= chat path)
+//   --stress-thinking  : scheduler path + enable_thinking=true (matches serve default)
+//
+// Both build a ~650-token prompt so kv_seq during decode matches the
+// crash threshold seen in serve mode (kv_seq ≈ 553-610).
+static int RunStressTest(
+    const std::string& model_path,
+    bool use_scheduler,
+    bool use_thinking = false)
+{
+    std::cout << "===== Stress Test (mode="
+              << (use_scheduler ? "scheduler" : "direct")
+              << ") =====" << std::endl;
+
+    auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+
+    if (!bundle.runner->Load(model_path))
+    {
+        std::cerr << "Stress: model load failed." << std::endl;
+        return -1;
+    }
+    if (!bundle.tokenizer->Load(model_path))
+    {
+        std::cerr << "Stress: tokenizer load failed." << std::endl;
+        return -1;
+    }
+
+    bundle.runner->InitKVCache(1, bundle.runner->GetConfig().max_position_embeddings);
+
+    mllm::GenerateOptions opts;
+    opts.max_new_tokens     = use_thinking ? 512 : 64;
+    opts.temperature        = 0.0f;
+    opts.top_k              = 1;
+    opts.use_greedy         = true;
+    opts.enable_thinking    = use_thinking;
+    opts.eos_token_id       = bundle.tokenizer->GetEOSTokenId();
+
+    // Multi-turn stress: simulate serve-mode conversation where each turn's
+    // full history (system + all prior turns + new user msg) is re-encoded.
+    // ~80 tokens per user turn × 5 turns + ~60 tokens responses → kv_seq > 600.
+    const std::string system_prompt = "You are a helpful assistant.";
+
+    // Each user message is ~80 tokens
+    const std::vector<std::string> user_turns = {
+        "Please explain in detail what machine learning is. Include key concepts, "
+        "types of learning, and real-world applications. Be thorough.",
+        "Now explain deep learning and how it differs from classical ML. "
+        "Describe neural networks, layers, and backpropagation in detail.",
+        "Describe transformer architecture thoroughly. Explain self-attention, "
+        "multi-head attention, positional encoding, and why transformers dominate NLP.",
+        "Explain how large language models like GPT are trained. Describe "
+        "pretraining objectives, fine-tuning, RLHF, and inference at scale.",
+        "Summarize all four topics above in a concise paragraph each. "
+        "Then discuss future directions for AI research.",
+    };
+
+    // accumulated chat history for building full-context prompts each turn
+    struct Turn { std::string role; std::string content; };
+    std::vector<Turn> history;
+
+    std::unique_ptr<mllm::Scheduler> scheduler_ptr;
+    if (use_scheduler)
+    {
+        scheduler_ptr = std::make_unique<mllm::Scheduler>(*bundle.runner);
+        scheduler_ptr->Start();
+    }
+
+    for (int turn = 0; turn < static_cast<int>(user_turns.size()); ++turn)
+    {
+        history.push_back({"user", user_turns[turn]});
+
+        // Build full prompt from all history (mirrors serve-mode BuildPromptFromMessages)
+        std::vector<mllm::Message> msgs;
+        for (const auto& t : history)
+            msgs.push_back({t.role, t.content});
+
+        const std::string prompt =
+            bundle.tokenizer->BuildPromptFromMessages(msgs, false);
+        auto ids = bundle.tokenizer->Encode(prompt);
+
+        std::cout << "[Stress] Turn " << turn
+                  << "  prompt_tokens=" << ids.size() << std::endl;
+
+        std::string reply_text;
+        bool ok = true;
+
+        if (use_scheduler)
+        {
+            auto req = std::make_shared<mllm::GenerationRequest>();
+            req->request_id    = "stress-" + std::to_string(turn);
+            req->prompt_tokens = ids;
+            req->options       = opts;
+
+            auto fut = req->result_promise.get_future();
+            scheduler_ptr->GetQueue().Push(std::move(req));
+
+            try
+            {
+                auto result = fut.get();
+                reply_text = bundle.tokenizer->Decode(result.tokens);
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "[Stress] Turn " << turn << " EXCEPTION: " << e.what() << std::endl;
+                ok = false;
+            }
+        }
+        else
+        {
+            try
+            {
+                auto result = bundle.runner->Generate(ids, opts);
+                reply_text = bundle.tokenizer->Decode(result.tokens);
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "[Stress] Turn " << turn << " EXCEPTION: " << e.what() << std::endl;
+                ok = false;
+            }
+        }
+
+        if (ok)
+        {
+            std::cout << "[Stress] Turn " << turn << " OK  reply_len=" << reply_text.size()
+                      << "  preview=" << reply_text.substr(0, 80) << std::endl;
+            history.push_back({"assistant", reply_text});
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    if (use_scheduler)
+        scheduler_ptr->Stop();
+
+    return 0;
+}
+
 // --parity: fixed forward pass used by regression_test.py
 static int RunParityCheck(
     const std::string& model_path,
@@ -99,9 +288,33 @@ static int RunParityCheck(
 
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(CrashHandler);
+#endif
+
+    std::set_terminate([](){
+        try { if (auto ep = std::current_exception()) std::rethrow_exception(ep); }
+        catch (const std::exception& ex) { std::cerr << "[TERMINATE] " << ex.what() << std::endl; }
+        catch (...) { std::cerr << "[TERMINATE] unknown exception\n"; }
+        std::cerr.flush();
+        std::abort();
+    });
+
     try
     {
     const std::string model_path = ParseModelPath(argc, argv);
+
+    // --------------------------------
+    // --stress / --stress-direct
+    // --------------------------------
+    if (HasFlag(argc, argv, "--stress"))
+        return RunStressTest(model_path, true);
+
+    if (HasFlag(argc, argv, "--stress-direct"))
+        return RunStressTest(model_path, false);
+
+    if (HasFlag(argc, argv, "--stress-thinking"))
+        return RunStressTest(model_path, true, true);
 
     // --------------------------------
     // --parity

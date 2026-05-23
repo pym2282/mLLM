@@ -3,6 +3,9 @@
 #include "serving/Scheduler.h"
 #include "models/base/GenerateResult.h"
 #include <iostream>
+#include <c10/cuda/CUDAFunctions.h>
+#include <c10/cuda/CUDAStream.h>
+#include <torch/torch.h>
 
 namespace mllm
 {
@@ -44,6 +47,17 @@ namespace mllm
 
     void Scheduler::RunLoop()
     {
+        c10::cuda::set_device(0);
+        (void)c10::cuda::getCurrentCUDAStream(0);
+        {
+            auto warmup = torch::empty(
+                {1},
+                torch::TensorOptions()
+                    .dtype(torch::kFloat16)
+                    .device(torch::kCUDA)
+            );
+        }
+
         while (true)
         {
             auto req = queue_.Pop();

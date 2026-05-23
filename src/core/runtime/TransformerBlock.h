@@ -76,18 +76,8 @@ namespace mllm
             // Qwen3 path
             if (use_qk_norm)
             {
-                // --------------------------------
-                // Q projection
-                // --------------------------------
-                auto q = Linear::Forward(
-                    h,
-                    lw.w_q
-                );
+                auto q = Linear::Forward(h, lw.w_q);
 
-                // q:
-                // [B, S, hidden]
-                // ->
-                // [B, num_heads, S, head_dim]
                 q = q.view({
                     q.size(0),
                     q.size(1),
@@ -95,29 +85,11 @@ namespace mllm
                     head_dim
                 }).transpose(1, 2);
 
-                // IMPORTANT:
-                // Qwen q_norm weight shape == [head_dim]
-                // not [hidden_size]
-                //
-                // so RMSNorm must happen AFTER reshape
-                q = RMSNorm::Forward(
-                    q,
-                    lw.w_q_norm,
-                    rms_norm_eps
-                );
+                // RMSNorm must happen AFTER reshape (weight shape == [head_dim])
+                q = RMSNorm::Forward(q, lw.w_q_norm, rms_norm_eps);
 
-                // --------------------------------
-                // K projection
-                // --------------------------------
-                auto k = Linear::Forward(
-                    h,
-                    lw.w_k
-                );
+                auto k = Linear::Forward(h, lw.w_k);
 
-                // k:
-                // [B, S, kv_hidden]
-                // ->
-                // [B, num_kv_heads, S, head_dim]
                 k = k.view({
                     k.size(0),
                     k.size(1),
@@ -125,26 +97,10 @@ namespace mllm
                     head_dim
                 }).transpose(1, 2);
 
-                // IMPORTANT:
-                // same for k_norm
-                k = RMSNorm::Forward(
-                    k,
-                    lw.w_k_norm,
-                    rms_norm_eps
-                );
+                k = RMSNorm::Forward(k, lw.w_k_norm, rms_norm_eps);
 
-                // --------------------------------
-                // V projection
-                // --------------------------------
-                auto v = Linear::Forward(
-                    h,
-                    lw.w_v
-                );
+                auto v = Linear::Forward(h, lw.w_v);
 
-                // v:
-                // [B, S, kv_hidden]
-                // ->
-                // [B, num_kv_heads, S, head_dim]
                 v = v.view({
                     v.size(0),
                     v.size(1),
@@ -152,17 +108,6 @@ namespace mllm
                     head_dim
                 }).transpose(1, 2);
 
-                // --------------------------------
-                // ForwardProjected expects:
-                //
-                // q: [B, H, S, D]
-                // k: [B, KV, S, D]
-                // v: [B, KV, S, D]
-                //
-                // so reshape again inside
-                // should NOT happen there
-                // (must be adjusted in Attention.h)
-                // --------------------------------
                 h = Attention::ForwardProjected(
                     q,
                     k,
@@ -201,22 +146,11 @@ namespace mllm
 
             residual = h.clone();
 
-            h = RMSNorm::Forward(
-                h,
-                lw.post_attention_layernorm,
-                rms_norm_eps
-            );
+            h = RMSNorm::Forward(h, lw.post_attention_layernorm, rms_norm_eps);
 
-            h = MLP::Forward(
-                h,
-                lw.w_gate,
-                lw.w_up,
-                lw.w_down
-            );
+            h = MLP::Forward(h, lw.w_gate, lw.w_up, lw.w_down);
 
-            h = residual + h;
-
-            return h;
+            return residual + h;
         }
     };
 }

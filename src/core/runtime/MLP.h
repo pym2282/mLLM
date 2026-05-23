@@ -38,7 +38,8 @@ namespace mllm
             auto up   = Linear::Forward(x, w_up);
             // SiLU = x * sigmoid(x). Using primitives instead of torch::silu
             // for libtorch version portability.
-            auto act  = gate * torch::sigmoid(gate) * up;
+            auto act = gate.mul(torch::sigmoid(gate));
+            act.mul_(up);
             return Linear::Forward(act, w_down);
         }
     };

@@ -265,31 +265,28 @@ namespace mllm
 
             // =====================================================
             // Causal Mask
+            // S==1 (decode step): single query attends to all KV positions
+            // unconditionally, so no mask is needed.
             // =====================================================
 
-            const auto total_seq =
-                k.size(2);
+            if (S > 1)
+            {
+                const auto total_seq = k.size(2);
 
-            auto mask_opts =
-                torch::TensorOptions()
-                    .dtype(torch::kFloat32)
-                    .device(q.device());
+                auto mask =
+                    torch::triu(
+                        torch::full(
+                            {S, total_seq},
+                            -std::numeric_limits<float>::infinity(),
+                            torch::TensorOptions()
+                                .dtype(torch::kFloat32)
+                                .device(q.device())
+                        ),
+                        1 + (total_seq - S)
+                    );
 
-            auto mask =
-                torch::triu(
-                    torch::full(
-                        {
-                            S,
-                            total_seq
-                        },
-                        -std::numeric_limits<float>::infinity(),
-                        mask_opts
-                    ),
-                    1 + (total_seq - S)
-                );
-
-            scores =
-                scores + mask;
+                scores = scores + mask;
+            }
 
             auto attn =
                 torch::softmax(

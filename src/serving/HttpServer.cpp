@@ -176,7 +176,7 @@ namespace mllm
             opts.use_greedy = body["use_greedy"].get<bool>();
         if (body.contains("repetition_penalty") && body["repetition_penalty"].is_number())
             opts.repetition_penalty = body["repetition_penalty"].get<float>();
-        opts.enable_thinking = tokenizer.SupportsThinking();
+        opts.enable_thinking = false;
         if (body.contains("enable_thinking") && body["enable_thinking"].is_boolean())
             opts.enable_thinking = body["enable_thinking"].get<bool>();
         opts.eos_token_id = tokenizer.GetEOSTokenId();
@@ -233,7 +233,7 @@ namespace mllm
             {"text",          text},
             {"finish_reason", FinishReasonStr(result.finish_reason)}
         };
-        res.set_content(response.dump(-1, ' ', true), "application/json; charset=utf-8");
+        res.set_content(response.dump(-1, ' ', true, nlohmann::json::error_handler_t::replace), "application/json; charset=utf-8");
     }
 
     // ----------------------------------------------------------------
@@ -289,7 +289,7 @@ namespace mllm
             opts.temperature = body["temperature"].get<float>();
         if (body.contains("top_p") && body["top_p"].is_number())
             opts.top_p = body["top_p"].get<float>();
-        opts.enable_thinking = tokenizer.SupportsThinking();
+        opts.enable_thinking = false;
         if (body.contains("enable_thinking") && body["enable_thinking"].is_boolean())
             opts.enable_thinking = body["enable_thinking"].get<bool>();
         opts.eos_token_id = tokenizer.GetEOSTokenId();
@@ -507,7 +507,7 @@ namespace mllm
                 {"total_tokens",      prompt_token_count + ctoks}
             }}
         };
-        res.set_content(response.dump(-1, ' ', true), "application/json; charset=utf-8");
+        res.set_content(response.dump(-1, ' ', true, nlohmann::json::error_handler_t::replace), "application/json; charset=utf-8");
     }
 
     // ----------------------------------------------------------------

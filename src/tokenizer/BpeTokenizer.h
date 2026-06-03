@@ -43,6 +43,13 @@ namespace mllm
         int64_t eos_token_id_ = -1;
         bool byte_fallback_ = false;
 
+        // Atomic special tokens (control/user-defined) that bypass BPE
+        // sorted longest-first so greedy matching works correctly
+        std::vector<std::pair<std::string, int64_t>> special_tokens_;
+
+        // Load directly from GGUF embedded tokenizer metadata
+        bool LoadFromGguf(const std::string& gguf_path);
+
     private:
         std::unordered_map<std::string, int> merge_rank_;
 

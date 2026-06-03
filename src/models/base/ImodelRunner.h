@@ -23,9 +23,27 @@ namespace mllm
         int max_position_embeddings = 0;
         int intermediate_size = 0;
         int head_dim = 0;
+        int rope_dim = 0;  // partial RoPE: only first rope_dim dims rotated (0 = use head_dim)
         float rms_norm_eps = 1e-5f;
         float rope_theta = 10000.0f;
+        float local_rope_theta = 0.0f;  // Gemma 4 local-layer RoPE base (0 = use rope_theta)
         bool tie_word_embeddings = false;
+
+        // Sliding window attention (Gemma 4) — 0 means full attention for all layers
+        int sliding_window_size = 0;
+        // Gemma 4 Per-Layer Input dim (D_ple) — 0 means no AltUP mechanism
+        int hidden_size_per_layer_input = 0;
+
+        // Qwen3.5 hybrid (Gated DeltaNet) — zero means pure transformer
+        // Reused for Gemma 4 global attention interval (every N-th layer uses full attention)
+        int full_attention_interval = 0;
+        int ssm_num_v_heads  = 0;  // DeltaNet value/state heads
+        int ssm_num_k_heads  = 0;  // DeltaNet key heads
+        int ssm_head_v_dim   = 0;  // state dim per value head (= state_size)
+        int ssm_head_k_dim   = 0;  // key dim per key head (derived = head_v_dim)
+        int ssm_inner_size   = 0;  // value_dim = num_v_heads * head_v_dim
+        int ssm_conv_dim     = 0;  // conv channels = 2*key_dim + value_dim
+        int ssm_conv_kernel  = 4;  // causal conv kernel size
     };
 
     class IModelRunner

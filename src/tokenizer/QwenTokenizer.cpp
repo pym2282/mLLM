@@ -160,9 +160,10 @@ namespace mllm
 
         for (const auto& [id, token] : id_to_token_)
         {
-            if (token.size() >= 4 &&
-                token.rfind("<|", 0) == 0 &&
-                token.find("|>") == token.size() - 2)
+            // Treat all angle-bracket tokens as special (e.g. <|im_start|>, <think>, </think>)
+            if (token.size() >= 3 &&
+                token.front() == '<' &&
+                token.back() == '>')
             {
                 special_tokens_[token] = id;
             }
@@ -338,8 +339,10 @@ namespace mllm
         }
 
         prompt += "<|im_start|>assistant\n";
-        if (!enable_thinking)
-            prompt += "<think>\n\n</think>\n";
+        if (enable_thinking)
+            prompt += "<think>\n";
+        else
+            prompt += "<think>\n\n</think>\n\n";
 
         return prompt;
     }
@@ -361,8 +364,10 @@ namespace mllm
         prompt += "\n<|im_end|>\n";
 
         prompt += "<|im_start|>assistant\n";
-        if (!enable_thinking)
-            prompt += "<think>\n\n</think>\n";
+        if (enable_thinking)
+            prompt += "<think>\n";
+        else
+            prompt += "<think>\n\n</think>\n\n";
 
         return prompt;
     }
@@ -378,8 +383,10 @@ namespace mllm
         s += user_prompt;
         s += "\n<|im_end|>\n";
         s += "<|im_start|>assistant\n";
-        if (!enable_thinking)
-            s += "<think>\n\n</think>\n";
+        if (enable_thinking)
+            s += "<think>\n";
+        else
+            s += "<think>\n\n</think>\n\n";
         return s;
     }
 

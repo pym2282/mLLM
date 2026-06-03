@@ -37,7 +37,11 @@ namespace mllm
             int head_dim,
             double rope_theta,
             const torch::Tensor& position_ids,
-            KVCache* kv_cache)
+            KVCache* kv_cache,
+            const torch::Tensor& b_q = {},
+            const torch::Tensor& b_k = {},
+            const torch::Tensor& b_v = {},
+            int rope_dim = 0)
         {
             if (hidden.dim() != 3)
             {
@@ -46,9 +50,9 @@ namespace mllm
                 );
             }
 
-            auto q = Linear::Forward(hidden, w_q);
-            auto k = Linear::Forward(hidden, w_k);
-            auto v = Linear::Forward(hidden, w_v);
+            auto q = Linear::Forward(hidden, w_q, b_q);
+            auto k = Linear::Forward(hidden, w_k, b_k);
+            auto v = Linear::Forward(hidden, w_v, b_v);
 
             q = q.view({
                 q.size(0),
@@ -81,7 +85,9 @@ namespace mllm
                 head_dim,
                 rope_theta,
                 position_ids,
-                kv_cache
+                kv_cache,
+                /*out_gate=*/{},
+                rope_dim
             );
         }
 
@@ -107,7 +113,9 @@ namespace mllm
             int head_dim,
             double rope_theta,
             const torch::Tensor& position_ids,
-            KVCache* kv_cache)
+            KVCache* kv_cache,
+            const torch::Tensor& out_gate = {},
+            int rope_dim = 0)
         {
             // =========================================================
             // Expected input shapes (already projected + reshaped)
@@ -153,10 +161,12 @@ namespace mllm
             // RoPE
             // =====================================================
 
+            if (rope_dim <= 0) rope_dim = head_dim;
+
             auto cs =
                 RoPE::BuildCosSin(
                     position_ids,
-                    head_dim,
+                    rope_dim,
                     rope_theta
                 );
 
@@ -212,6 +222,7 @@ namespace mllm
                     }
                     kv_cache->key = k;
                     kv_cache->value = v;
+                    kv_cache->len += S;
                 }
             }
 
@@ -272,6 +283,14 @@ namespace mllm
                         S,
                         num_heads * head_dim
                     });
+
+            // =====================================================
+            // Output gate (Qwen3.5 FULLATT: attn_output_gate=true)
+            // out_gate: [B, S, num_heads * head_dim]
+            // =====================================================
+
+            if (out_gate.defined())
+                out = out * torch::sigmoid(out_gate);
 
             // =====================================================
             // Output projection

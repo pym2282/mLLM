@@ -9,6 +9,7 @@
 // Windows SEH exception filter: writes a minidump on crash
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <dbghelp.h>
 #pragma comment(lib, "dbghelp.lib")
@@ -112,7 +113,7 @@ static bool HasFlag(int argc, char* argv[], const std::string& flag)
 //
 //   --stress           : runs via Scheduler worker thread  (= serve path)
 //   --stress-direct    : calls Generate() on main thread   (= chat path)
-//   --stress-thinking  : scheduler path + enable_thinking=true (matches serve default)
+//   --stress-thinking  : scheduler path + enable_thinking=true
 //
 // Both build a ~650-token prompt so kv_seq during decode matches the
 // crash threshold seen in serve mode (kv_seq ≈ 553-610).
@@ -451,7 +452,8 @@ int main(int argc, char* argv[])
     options.use_greedy         = true;
     options.repetition_penalty = 1.0f;
     options.eos_token_id       = bundle.tokenizer->GetEOSTokenId();
-    options.enable_thinking    = bundle.tokenizer->SupportsThinking();
+    options.enable_thinking    =
+        bundle.tokenizer->SupportsThinking() && HasFlag(argc, argv, "--thinking");
 
     std::cout
         << "[GenerateOptions]"

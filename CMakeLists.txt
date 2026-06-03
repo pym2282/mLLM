@@ -37,6 +37,7 @@ add_executable(mLLM
         # model
         src/models/llama/LlamaRunner.cpp
         src/models/qwen/QwenRunner.cpp
+        src/models/gemma/GemmaRunner.cpp
 
         # serving
         src/serving/Scheduler.cpp
@@ -73,6 +74,8 @@ else()
     set(LIBTORCH_LIB_DIR "C:/libtorch/lib")
 endif()
 
+# Minimal DLL set — empirically verified via regression_test.py.
+# Excludes cuDNN (~1GB), cufft, cusparse, cusolver, curand, cupti, nvperf (unused at inference).
 add_custom_command(
         TARGET mLLM
         POST_BUILD

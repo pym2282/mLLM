@@ -48,19 +48,33 @@ namespace mllm
         bool LoadConfig(
             const std::string& config_path);
 
+        // .gguf path: load config + weights via GgufLoader
+        bool LoadGguf(const std::string& gguf_path);
+
         torch::Tensor& LoadWeight(
             const std::string& name);
 
-        // Returns undefined tensor if name not in tensor_map_
+        // Returns undefined tensor if name not in tensor_map_ or weights_
         torch::Tensor TryLoadWeight(
             const std::string& name);
 
         void LoadAllWeights();
+        void EnsureOnGPU();  // Lazy: 첫 Generate() 호출 시 CPU→GPU 이동
+
+        // Forward pass for one Qwen3.5 hybrid (Gated DeltaNet) layer
+        torch::Tensor ForwardHybridLayer(
+            const torch::Tensor& hidden,
+            const LinearAttnWeights& law,
+            const LayerWeights& lw,
+            SSMCache* cache);
 
     private:
         ModelConfig config_;
 
         std::string model_path_;
+        std::string pending_cache_path_;
+        std::string pending_cache_src_;
+        bool gpu_ready_ = false;  // GPU 전송 완료 여부
 
         std::unordered_map<
             std::string,
@@ -75,8 +89,20 @@ namespace mllm
         std::vector<LayerWeights>
             layer_weights_;
 
+        std::vector<LinearAttnWeights>
+            linear_attn_weights_;
+
         std::vector<KVCache>
             kv_caches_;
+
+        std::vector<SSMCache>
+            ssm_caches_;
+
+        std::vector<bool>
+            layer_is_hybrid_;
+
+        // Total tokens processed since last prefill (0 = no prefill done)
+        int prefilled_tokens_ = 0;
 
         bool is_loaded_ = false;
         bool parity_mode_ = false;

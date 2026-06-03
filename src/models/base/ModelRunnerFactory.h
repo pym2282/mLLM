@@ -13,8 +13,11 @@
 
 #include "models/llama/LlamaRunner.h"
 #include "models/qwen/QwenRunner.h"
+#include "models/gemma/GemmaRunner.h"
 #include "tokenizer/LlamaTokenizer.h"
 #include "tokenizer/QwenTokenizer.h"
+#include "tokenizer/GemmaTokenizer.h"
+#include "models/base/GgufLoader.h"
 
 namespace mllm
 {
@@ -32,8 +35,26 @@ namespace mllm
         // wrong architecture and producing misleading tensor errors later.
         static ModelBundle Create(const std::string& model_path)
         {
-            const std::string model_type =
-                ReadModelType(model_path + "/config.json");
+            std::string model_type;
+
+            if (GgufLoader::IsGguf(model_path))
+            {
+                // Map GGUF architecture → internal model_type
+                const std::string arch = GgufLoader::ReadArchitecture(model_path);
+                if (arch == "qwen3" || arch == "qwen35" || arch == "qwen2" || arch == "qwen2moe")
+                    model_type = "qwen3";
+                else if (arch == "llama")
+                    model_type = "llama";
+                else if (arch == "gemma4" || arch == "gemma3" || arch == "gemma2" || arch == "gemma")
+                    model_type = "gemma";
+                else
+                    throw std::runtime_error(
+                        "Unsupported GGUF architecture '" + arch + "' in " + model_path);
+            }
+            else
+            {
+                model_type = ReadModelType(model_path + "/config.json");
+            }
 
             std::cerr
                 << "[ModelRunnerFactory] model_type=" << model_type
@@ -51,6 +72,11 @@ namespace mllm
             {
                 bundle.runner    = std::make_unique<LlamaRunner>();
                 bundle.tokenizer = std::make_unique<LlamaTokenizer>();
+            }
+            else if (model_type == "gemma")
+            {
+                bundle.runner    = std::make_unique<GemmaRunner>();
+                bundle.tokenizer = std::make_unique<GemmaTokenizer>();
             }
             else
             {

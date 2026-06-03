@@ -2,6 +2,8 @@
 
 #include "tokenizer/BpeTokenizer.h"
 #include "tokenizer/TokenizerJsonLoader.h"
+#include "models/base/GgufLoader.h"
+#include <algorithm>
 
 #include <algorithm>
 #include <iostream>
@@ -44,8 +46,102 @@ namespace mllm
     // Load
     // -------------------------------------------------------
 
+    bool BpeTokenizer::LoadFromGguf(const std::string& gguf_path)
+    {
+        try
+        {
+            token_to_id_.clear();
+            id_to_token_.clear();
+            merge_rank_.clear();
+            bos_token_id_ = -1;
+            eos_token_id_ = -1;
+            byte_fallback_ = false;
+
+            auto td = GgufLoader::LoadTokenizerData(gguf_path);
+
+            if (td.tokens.empty())
+                throw std::runtime_error("GgufLoader: no tokenizer.ggml.tokens in " + gguf_path);
+
+            // Build vocab maps from flat token array
+            token_to_id_.reserve(td.tokens.size());
+            id_to_token_.reserve(td.tokens.size());
+            for (size_t id = 0; id < td.tokens.size(); ++id)
+            {
+                const std::string& tok = td.tokens[id];
+                token_to_id_[tok] = static_cast<int64_t>(id);
+                id_to_token_[static_cast<int64_t>(id)] = tok;
+            }
+
+            // BPE merges: stored as "a b" → split on first space
+            merge_rank_.reserve(td.merges.size());
+            for (int rank = 0; rank < static_cast<int>(td.merges.size()); ++rank)
+            {
+                const std::string& m = td.merges[rank];
+                size_t sp = m.find(' ');
+                if (sp == std::string::npos) continue;
+                std::string first  = m.substr(0, sp);
+                std::string second = m.substr(sp + 1);
+                merge_rank_[first + '\0' + second] = rank;
+            }
+
+            // byte fallback: if any token matches <0xXX> pattern
+            for (size_t id = 0; id < td.tokens.size() && id < td.token_types.size(); ++id)
+            {
+                if (td.token_types[id] == 5) // byte type
+                {
+                    byte_fallback_ = true;
+                    break;
+                }
+            }
+
+            // Special token IDs
+            bos_token_id_ = td.bos_id;
+            eos_token_id_ = td.eos_id;
+
+            // Collect atomic special tokens (control=2, user-defined=3)
+            // These bypass BPE and are matched literally in Encode()
+            special_tokens_.clear();
+            for (size_t id = 0; id < td.tokens.size(); ++id)
+            {
+                const std::string& t = td.tokens[id];
+                int32_t ttype = (id < td.token_types.size()) ? td.token_types[id] : 0;
+                // type 2=control, type 3=user_defined  — treat as atomic
+                if (ttype == 2 || ttype == 3)
+                    special_tokens_.emplace_back(t, static_cast<int64_t>(id));
+
+                if ((t == "<eos>" || t == "</s>") && eos_token_id_ < 0)
+                    eos_token_id_ = static_cast<int64_t>(id);
+                if ((t == "<bos>" || t == "<s>") && bos_token_id_ < 0)
+                    bos_token_id_ = static_cast<int64_t>(id);
+            }
+            // Sort longest-first for greedy matching
+            std::sort(special_tokens_.begin(), special_tokens_.end(),
+                [](const auto& a, const auto& b){ return a.first.size() > b.first.size(); });
+
+            std::cerr << "[BpeTokenizer/gguf] vocab=" << token_to_id_.size()
+                      << " merges=" << merge_rank_.size()
+                      << " special=" << special_tokens_.size()
+                      << " BOS=" << bos_token_id_
+                      << " EOS=" << eos_token_id_
+                      << " byte_fallback=" << byte_fallback_ << "\n";
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "[BpeTokenizer] LoadFromGguf failed: " << e.what() << "\n";
+            return false;
+        }
+        return true;
+    }
+
     bool BpeTokenizer::Load(const std::string& model_path)
     {
+        // GGUF: load tokenizer directly from embedded metadata
+        if (model_path.size() >= 5 &&
+            model_path.compare(model_path.size() - 5, 5, ".gguf") == 0)
+        {
+            return LoadFromGguf(model_path);
+        }
+
         try
         {
             token_to_id_.clear();
@@ -257,16 +353,69 @@ namespace mllm
     // Encode
     // -------------------------------------------------------
 
-    std::vector<int64_t> BpeTokenizer::Encode(
+std::vector<int64_t> BpeTokenizer::Encode(
         const std::string& text
     ) const
     {
         std::vector<int64_t> result;
 
+        if (text.empty())
+        {
+            if (bos_token_id_ >= 0 && special_tokens_.empty())
+                result.push_back(bos_token_id_);
+            return result;
+        }
+
+        // If we have special tokens (GGUF mode), split text on them first.
+        // Otherwise use legacy path (auto-BOS + full BPE).
+        if (!special_tokens_.empty())
+        {
+            // Greedy scan: find the earliest special token match at each position
+            size_t pos = 0;
+            std::string pending;  // non-special text accumulated
+
+            auto flush = [&]()
+            {
+                if (pending.empty()) return;
+                const std::string preprocessed = PreTokenize(pending);
+                auto syms = InitialSymbols(preprocessed);
+                syms = ApplyMerges(std::move(syms));
+                for (const auto& sym : syms)
+                {
+                    auto it = token_to_id_.find(sym);
+                    if (it != token_to_id_.end())
+                        result.push_back(it->second);
+                }
+                pending.clear();
+            };
+
+            while (pos < text.size())
+            {
+                // Try to match a special token at pos
+                bool matched = false;
+                for (const auto& [st, id] : special_tokens_)
+                {
+                    if (text.compare(pos, st.size(), st) == 0)
+                    {
+                        flush();
+                        result.push_back(id);
+                        pos += st.size();
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched)
+                {
+                    pending.push_back(text[pos++]);
+                }
+            }
+            flush();
+            return result;
+        }
+
+        // Legacy path (tokenizer.json, no special_tokens_ list)
         if (bos_token_id_ >= 0)
             result.push_back(bos_token_id_);
-
-        if (text.empty()) return result;
 
         // 1. Model-specific pre-tokenization (Metaspace, ByteLevel, …)
         const std::string preprocessed = PreTokenize(text);

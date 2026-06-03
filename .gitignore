@@ -28,9 +28,14 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Logs / crash dumps
+# Logs / crash dumps / temp output
 *.log
 *.stackdump
+crash.dmp
+serve_std*.txt
+test_*.txt
+tok_*.txt
+run_*.txt
 
 # OS files
 .DS_Store

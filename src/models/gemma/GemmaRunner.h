@@ -62,5 +62,6 @@ namespace mllm
         torch::Tensor  per_layer_proj_norm_;     // [D_ple_per_layer]
 
         bool is_loaded_ = false;
+        bool norm_plain_weight_ = false;  // true for Gemma 4: RMSNorm uses w (not 1+w)
     };
 }

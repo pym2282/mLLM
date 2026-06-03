@@ -5,12 +5,13 @@
 
 namespace mllm
 {
-    // Gemma-style RMSNorm: y = x * (1 + w) / sqrt(mean(x^2) + eps)
-    // Differs from standard RMSNorm by (1 + w) weight scaling.
+    // Gemma 1/2-style RMSNorm: y = x * (1 + w) / sqrt(mean(x^2) + eps)
+    // Gemma 4-style RMSNorm: y = x * w / sqrt(mean(x^2) + eps)  (plain_weight=true)
     inline torch::Tensor GemmaRMSNorm(
         const torch::Tensor& x,
         const torch::Tensor& w,
-        double eps)
+        double eps,
+        bool plain_weight = false)  // true for Gemma 4 (Gemma4RMSNorm: w not 1+w)
     {
         const auto dtype = x.scalar_type();
         const auto device = x.device();
@@ -18,6 +19,8 @@ namespace mllm
         auto wf = w.to(torch::TensorOptions().dtype(torch::kFloat32).device(device));
 
         auto rms = torch::rsqrt(xf.pow(2).mean(-1, /*keepdim=*/true) + eps);
+        if (plain_weight)
+            return (xf * rms * wf).to(dtype);
         return (xf * rms * (1.0f + wf)).to(dtype);
     }
 
@@ -44,22 +47,18 @@ namespace mllm
         const torch::Tensor& w_proj,
         const torch::Tensor& post_norm_w,
         const torch::Tensor& layer_scalar,
-        double eps)
+        double eps,
+        bool norm_plain_weight = false)
     {
-        // gate: [B, S, D_ple]
         auto gate = torch::nn::functional::gelu(
             torch::nn::functional::linear(hidden, w_inp_gate),
             torch::nn::functional::GELUFuncOptions().approximate("tanh"));
-        // element-wise multiply with per-layer embedding (broadcast over B,S)
         gate = gate * per_layer_emb;
-        // project back: [B, S, H]
         auto out = torch::nn::functional::linear(gate, w_proj);
         if (post_norm_w.defined())
-            out = GemmaRMSNorm(out, post_norm_w, eps);
-        // layer_scalar scales only the AltUP contribution, not the full residual
-        if (layer_scalar.defined())
-            out = out * layer_scalar.item<float>();
+            out = GemmaRMSNorm(out, post_norm_w, eps, norm_plain_weight);
         return hidden + out;
+        (void)layer_scalar;
     }
 
     // Sliding window causal attention bias for prefill.

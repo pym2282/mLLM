@@ -98,6 +98,11 @@ namespace mllm
 
         kv_caches_.clear();
         kv_caches_.resize(config_.num_layers);
+
+        // Gemma 4 uses Gemma4RMSNorm (output = norm(x)*w, not (1+w))
+        // Detect by AltUP presence (hidden_size_per_layer_input > 0)
+        norm_plain_weight_ = (config_.hidden_size_per_layer_input > 0);
+
         is_loaded_ = true;
 
         std::cout << "[GemmaRunner] Loaded (GGUF)"
@@ -277,7 +282,7 @@ namespace mllm
                 torch::TensorOptions().dtype(torch::kInt64).device(wdev));
         }
 
-        // Embedding + scale
+        // Embedding + scale by sqrt(H) (Gemma 1/2/4 all use this)
         auto hidden = EmbeddingLookup::Forward(
             input_ids, weights_.at("model.embed_tokens.weight"));
         hidden = hidden * std::sqrt(static_cast<double>(config_.hidden_size));
@@ -298,22 +303,34 @@ namespace mllm
             auto model_proj = Linear::Forward(hidden, per_layer_model_proj_);
             model_proj = model_proj * (1.0 / std::sqrt(static_cast<double>(config_.hidden_size)));
 
-            // 3. Apply per_layer_proj_norm (Gemma4RMSNorm: x*(1+w)/rms) to projection slices
+            // 3. Apply per_layer_proj_norm to projection slices
             if (per_layer_proj_norm_.defined())
             {
                 const auto dtype = model_proj.scalar_type();
                 auto B2 = model_proj.size(0); auto S2 = model_proj.size(1);
                 auto chunks = model_proj.view({B2, S2, config_.num_layers, D_ple});
-                // GemmaRMSNorm: y = x * (1 + w) / rms(x)
                 auto xf = chunks.to(torch::kFloat32);
                 auto wf = per_layer_proj_norm_.to(torch::kFloat32);
                 auto rms = torch::rsqrt(xf.pow(2).mean(-1, true) + eps);
-                model_proj = (xf * rms * (1.0f + wf)).view({B2, S2, config_.num_layers * D_ple}).to(dtype);
+                // Gemma 4: Gemma4RMSNorm uses plain w (not 1+w)
+                const float wscale = norm_plain_weight_ ? 1.0f : 0.0f;  // xf*rms*(wscale*wf + (1-wscale)*wf*(1+1/wf))
+                // Simpler: branch directly
+                if (norm_plain_weight_)
+                    model_proj = (xf * rms * wf).view({B2, S2, config_.num_layers * D_ple}).to(dtype);
+                else
+                    model_proj = (xf * rms * (1.0f + wf)).view({B2, S2, config_.num_layers * D_ple}).to(dtype);
             }
 
             // 4. Sum and scale by 1/sqrt(2)
             per_layer_inputs = (tok_embs + model_proj) * (1.0 / std::sqrt(2.0));
         }
+
+        // Gemma 4 shared KV: layers >= kv_share_start reuse K/V from store layers.
+        // Store layers: (kv_share_start - 2) = last local, (kv_share_start - 1) = last global.
+        // Their KV caches are read by all subsequent shared layers.
+        const int kv_share_start = (config_.num_shared_kv_layers > 0)
+            ? (config_.num_layers - config_.num_shared_kv_layers)
+            : config_.num_layers;  // no sharing
 
         for (int i = 0; i < config_.num_layers; ++i)
         {
@@ -323,82 +340,146 @@ namespace mllm
 
             // ── Attention sub-block ──────────────────────────────────────────
             auto residual = hidden.clone();
-            auto h = GemmaRMSNorm(hidden, lw.input_layernorm, eps);
+            auto h = GemmaRMSNorm(hidden, lw.input_layernorm, eps, norm_plain_weight_);
 
-            // Project Q/K/V
+            // Project Q / K / V
             const auto B   = h.size(0);
             const auto Sq  = h.size(1);
             const auto n_kv = config_.num_key_value_heads;
 
             auto q_raw = Linear::Forward(h, lw.w_q);
-            auto k_raw = Linear::Forward(h, lw.w_k);
-            auto v_raw = Linear::Forward(h, lw.w_v);
 
-            // Derive head_dim from K weight shape (n_kv*hd) — handles per-layer variation
-            const int64_t hd  = static_cast<int64_t>(lw.w_k.size(0)) / n_kv;
-            const int64_t n_h = q_raw.size(2) / hd;
+            // Derive head_dim from Q weight shape (n_h*hd)
+            const int64_t n_h = static_cast<int64_t>(config_.num_attention_heads);
+            const int64_t hd  = q_raw.size(2) / n_h;
 
             auto q = q_raw.view({B, Sq, n_h, hd}).transpose(1, 2);
-            auto k = k_raw.view({B, Sq, n_kv, hd}).transpose(1, 2);
-            auto v = v_raw.view({B, Sq, n_kv, hd}).transpose(1, 2);
 
-            // QK-norm: Gemma variant (x*(1+w)), weights are zero-centered in GGUF
-            q = GemmaRMSNorm(q, lw.w_q_norm, eps);
-            k = GemmaRMSNorm(k, lw.w_k_norm, eps);
+            // QK-norm for Q
+            q = GemmaRMSNorm(q, lw.w_q_norm, eps, norm_plain_weight_);
 
-            // RoPE — global layers use rope_theta (1e6 for Gemma 4), local layers use local_rope_theta
+            // RoPE per layer type
             const double layer_rope_theta = global
                 ? static_cast<double>(config_.rope_theta)
                 : (config_.local_rope_theta > 0.0f
                    ? static_cast<double>(config_.local_rope_theta)
                    : static_cast<double>(config_.rope_theta));
-            // rope_dim: global layers use full hd (512), local use rope_dim_local (256)
-            const int layer_rope_dim = global
-                ? static_cast<int>(hd)
-                : (config_.rope_dim_local > 0 ? config_.rope_dim_local : static_cast<int>(hd));
-            auto cs = RoPE::BuildCosSin(position_ids, layer_rope_dim, layer_rope_theta);
-            q = RoPE::Apply(q, cs.first, cs.second);
-            k = RoPE::Apply(k, cs.first, cs.second);
 
-            // KV cache update
-            auto* cache = &kv_caches_[i];
-            if (cache->capacity > 0)
+            std::pair<torch::Tensor, torch::Tensor> cs;
+            if (global)
             {
-                int64_t old_len = cache->len;
-                int64_t new_len = old_len + Sq;
-                if (new_len > cache->capacity)
-                    throw std::runtime_error("GemmaRunner: KV cache overflow.");
-                cache->key.slice(2, old_len, new_len).copy_(k);
-                cache->value.slice(2, old_len, new_len).copy_(v);
-                cache->len = new_len;
-                k = cache->key.slice(2, 0, new_len);
-                v = cache->value.slice(2, 0, new_len);
+                const int active_pairs = static_cast<int>(hd) / 2 * config_.rope_global_partial_factor;
+                if (active_pairs > 0 && active_pairs < static_cast<int>(hd) / 2)
+                    cs = RoPE::BuildCosSinPartial(position_ids, static_cast<int>(hd),
+                                                  layer_rope_theta, active_pairs);
+                else
+                    cs = RoPE::BuildCosSin(position_ids, static_cast<int>(hd), layer_rope_theta);
             }
             else
             {
-                if (cache->IsInitialized())
+                const int layer_rope_dim = config_.rope_dim_local > 0
+                    ? config_.rope_dim_local : static_cast<int>(hd);
+                cs = RoPE::BuildCosSin(position_ids, layer_rope_dim, layer_rope_theta);
+            }
+            q = RoPE::Apply(q, cs.first, cs.second);
+
+            // ── K/V: shared or computed ──────────────────────────────────────
+            torch::Tensor k, v;
+            const bool is_kv_shared = (i >= kv_share_start);
+
+            if (is_kv_shared)
+            {
+                // Reuse K/V from the store layer (last local or last global before share_start)
+                const int store_idx = global
+                    ? (kv_share_start - 1)   // last global before sharing = layer 14
+                    : (kv_share_start - 2);  // last local before sharing  = layer 13
+                auto* store_cache = &kv_caches_[store_idx];
+                if (store_cache->len > 0)
                 {
-                    k = torch::cat({cache->key, k}, 2);
-                    v = torch::cat({cache->value, v}, 2);
+                    // For capacity caches: slice to current len
+                    if (store_cache->capacity > 0)
+                    {
+                        k = store_cache->key.slice(2, 0, store_cache->len);
+                        v = store_cache->value.slice(2, 0, store_cache->len);
+                    }
+                    else
+                    {
+                        k = store_cache->key;
+                        v = store_cache->value;
+                    }
                 }
-                cache->key   = k;
-                cache->value = v;
-                cache->len  += static_cast<int>(Sq);
+                else
+                {
+                    // Store layer not yet computed (shouldn't happen in normal order)
+                    throw std::runtime_error("GemmaRunner: shared KV store not populated.");
+                }
+            }
+            else
+            {
+                // Compute K/V normally
+                const int64_t hd_kv = static_cast<int64_t>(lw.w_k.size(0)) / n_kv;
+                auto k_raw = Linear::Forward(h, lw.w_k);
+                auto v_raw = Linear::Forward(h, lw.w_v);
+
+                k = k_raw.view({B, Sq, n_kv, hd_kv}).transpose(1, 2);
+                v = v_raw.view({B, Sq, n_kv, hd_kv}).transpose(1, 2);
+
+                k = GemmaRMSNorm(k, lw.w_k_norm, eps, norm_plain_weight_);
+                k = RoPE::Apply(k, cs.first, cs.second);
+
+                // Gemma 4: v_norm — pure RMSNorm (no learnable weight)
+                if (norm_plain_weight_)
+                {
+                    auto vf = v.to(torch::kFloat32);
+                    v = (vf * torch::rsqrt(vf.pow(2).mean(-1, true) + eps)).to(v.scalar_type());
+                }
             }
 
-            // GQA expand
-            const int64_t n_rep = n_h / static_cast<int64_t>(n_kv);
-            if (n_rep > 1)
+            // KV cache update — only for layers that compute their own K/V
+            if (!is_kv_shared)
             {
-                k = k.repeat_interleave(n_rep, 1);
-                v = v.repeat_interleave(n_rep, 1);
+                auto* cache = &kv_caches_[i];
+                if (cache->capacity > 0)
+                {
+                    int64_t old_len = cache->len;
+                    int64_t new_len = old_len + Sq;
+                    if (new_len > cache->capacity)
+                        throw std::runtime_error("GemmaRunner: KV cache overflow.");
+                    cache->key.slice(2, old_len, new_len).copy_(k);
+                    cache->value.slice(2, old_len, new_len).copy_(v);
+                    cache->len = new_len;
+                    k = cache->key.slice(2, 0, new_len);
+                    v = cache->value.slice(2, 0, new_len);
+                }
+                else
+                {
+                    if (cache->IsInitialized())
+                    {
+                        k = torch::cat({cache->key, k}, 2);
+                        v = torch::cat({cache->value, v}, 2);
+                    }
+                    cache->key   = k;
+                    cache->value = v;
+                    cache->len  += static_cast<int>(Sq);
+                }
+            }
+
+            // GQA expand: k.size(1) is actual n_kv heads (may differ if shared)
+            {
+                const int64_t actual_n_kv = k.size(1);
+                const int64_t n_rep = n_h / actual_n_kv;
+                if (n_rep > 1)
+                {
+                    k = k.repeat_interleave(n_rep, 1);
+                    v = v.repeat_interleave(n_rep, 1);
+                }
             }
 
             // Scaled dot-product attention with optional sliding window mask
             torch::Tensor attn_out;
             const int64_t kv_len = k.size(2);
-            // Gemma 4: query_pre_attn_scalar=256 fixed across all layers
-            const double kAttnScale = 1.0 / std::sqrt(static_cast<double>(config_.head_dim));
+            // Gemma 4: HF uses scaling=1.0 (QK-norm handles magnitude)
+            const double kAttnScale = 1.0;
             if (window > 0 && Sq > 1)
             {
                 auto mask = SlidingWindowMask(Sq, window, input_ids.device());
@@ -425,20 +506,30 @@ namespace mllm
 
             // Post-attention norm (Gemma 4)
             if (lw.post_attn_norm.defined())
-                h = GemmaRMSNorm(h, lw.post_attn_norm, eps);
+                h = GemmaRMSNorm(h, lw.post_attn_norm, eps, norm_plain_weight_);
 
             hidden = residual + h;
 
-            (void)is_decode;  // used below
+            // Dump hidden states for cosine-sim comparison (prefill only, MLLM_DUMP_HIDDEN=1)
+            static const bool s_dump = (std::getenv("MLLM_DUMP_HIDDEN") != nullptr);
+            if (i == 0 && !is_decode) std::cerr << "[DUMP] s_dump=" << s_dump << " env=" << (std::getenv("MLLM_DUMP_HIDDEN") ? "SET" : "NULL") << "\n";
+            if (s_dump && !is_decode) {
+                auto h_f32 = hidden[0][-1].to(torch::kFloat32).contiguous();
+                const float* ptr = h_f32.data_ptr<float>();
+                static FILE* fp = nullptr;
+                if (!fp) fp = fopen("C:/workspace/git/mLLM/hidden_dump_mllm.bin", "wb");
+                fwrite(ptr, sizeof(float), h_f32.numel(), fp);
+                fflush(fp);
+            }
 
             // ── FFN sub-block ────────────────────────────────────────────────
             residual = hidden.clone();
-            h = GemmaRMSNorm(hidden, lw.post_attention_layernorm, eps);
+            h = GemmaRMSNorm(hidden, lw.post_attention_layernorm, eps, norm_plain_weight_);
             h = GeGLU(h, lw.w_gate, lw.w_up, lw.w_down);
 
             // Post-FFN norm (Gemma 4)
             if (lw.post_ffn_norm.defined())
-                h = GemmaRMSNorm(h, lw.post_ffn_norm, eps);
+                h = GemmaRMSNorm(h, lw.post_ffn_norm, eps, norm_plain_weight_);
 
             hidden = residual + h;
 
@@ -449,12 +540,17 @@ namespace mllm
                 hidden = PerLayerInputForward(
                     hidden, emb_i,
                     lw.w_per_layer_inp_gate, lw.w_per_layer_proj,
-                    lw.per_layer_post_norm, lw.layer_scalar, eps);
+                    lw.per_layer_post_norm, lw.layer_scalar, eps, norm_plain_weight_);
             }
+
+            // Apply layer_scalar to the ENTIRE hidden state (Gemma 4 design)
+            // HF: hidden_states *= self.layer_scalar  (after AltUP, before next layer)
+            if (lw.layer_scalar.defined())
+                hidden = hidden * lw.layer_scalar.item<float>();
 
         }
 
-        hidden = GemmaRMSNorm(hidden, weights_.at("model.norm.weight"), eps);
+        hidden = GemmaRMSNorm(hidden, weights_.at("model.norm.weight"), eps, norm_plain_weight_);
 
         const torch::Tensor& lm_w = config_.tie_word_embeddings
             ? weights_.at("model.embed_tokens.weight")
@@ -556,3 +652,4 @@ namespace mllm
         return LoadModelConfigFromJson(config_path, config_);
     }
 }
+

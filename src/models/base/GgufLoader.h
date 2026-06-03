@@ -961,7 +961,19 @@ public:
             const std::string k = arch + "." + suffix;
             if (kn.count(k)) { c.local_rope_theta = static_cast<float>(kn.at(k)); break; }
         }
-        std::cerr << "[GgufLoader] local_rope_theta=" << c.local_rope_theta << "\n";
+        // Gemma 4 global RoPE: partial_rotary_factor (0.25 → only 25% of global head_dim dims rotate)
+        {
+            const std::string k = arch + ".rope.partial_rotary_factor";
+            if (kn.count(k))
+                c.rope_global_partial_factor = static_cast<float>(kn.at(k));
+            else if (arch == "gemma4")
+                c.rope_global_partial_factor = 0.25f;  // Gemma 4 default from HF config
+        }
+        // Gemma 4 KV sharing: last N layers reuse K/V from layers (num_layers-N-2) and (num_layers-N-1)
+        c.num_shared_kv_layers = geti("attention.shared_kv_layers", 0);
+        std::cerr << "[GgufLoader] local_rope_theta=" << c.local_rope_theta
+                  << " rope_global_partial_factor=" << c.rope_global_partial_factor
+                  << " num_shared_kv_layers=" << c.num_shared_kv_layers << "\n";
         c.max_position_embeddings = geti("context_length", 8192);
 
         // head_dim: prefer explicit key, fall back to hidden/heads

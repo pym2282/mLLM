@@ -26,33 +26,62 @@ namespace mllm
         // rope_dim:   number of dims to rotate (must be even; < head_dim for partial RoPE)
         // rope_theta: base frequency (e.g. 10000.0 for Llama)
         // Returns (cos, sin) both shape [S, rope_dim], fp32, on same device as positions.
+        // Standard RoPE: all rope_dim/2 pairs use 1/theta^(2i/rope_dim)
         static std::pair<torch::Tensor, torch::Tensor> BuildCosSin(
             const torch::Tensor& positions,
             int rope_dim,
             double rope_theta)
         {
             if (rope_dim % 2 != 0)
-            {
                 throw std::runtime_error("RoPE: rope_dim must be even.");
-            }
 
             const auto device = positions.device();
-            auto fopts = torch::TensorOptions()
-                .dtype(torch::kFloat32).device(device);
-
-            // idx: [rope_dim/2] = 0, 2, 4, ..., rope_dim-2
+            auto fopts = torch::TensorOptions().dtype(torch::kFloat32).device(device);
             auto idx = torch::arange(0, rope_dim, 2, fopts);
-            // inv_freq = 1 / theta^(idx/rope_dim) — divisor must be rope_dim
             const double log_theta = std::log(rope_theta);
-            auto inv_freq =
-                (idx / static_cast<double>(rope_dim) * log_theta).neg().exp();
+            auto inv_freq = (idx / static_cast<double>(rope_dim) * log_theta).neg().exp();
+            auto pos_f32 = positions.to(torch::kFloat32);
+            auto freqs = pos_f32.unsqueeze(-1) * inv_freq.unsqueeze(0);
+            auto emb = torch::cat({freqs, freqs}, -1);
+            return { emb.cos(), emb.sin() };
+        }
+
+        // Proportional partial RoPE (Gemma 4 global attention):
+        //   active_pairs active frequencies computed as 1/theta^(2i/head_dim)
+        //   remaining (head_dim/2 - active_pairs) frequencies = 0 → passthrough (cos=1,sin=0)
+        // active_pairs = head_dim / 2 * partial_rotary_factor
+        //              = 512/2 * 0.25 = 64 for Gemma 4 global layers
+        static std::pair<torch::Tensor, torch::Tensor> BuildCosSinPartial(
+            const torch::Tensor& positions,
+            int head_dim,
+            double rope_theta,
+            int active_pairs)  // active_pairs = head_dim/2 * partial_factor
+        {
+            if (head_dim % 2 != 0 || active_pairs > head_dim / 2)
+                throw std::runtime_error("RoPE partial: invalid dims.");
+
+            const auto device = positions.device();
+            auto fopts = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+
+            // Active inv_freq: 1/theta^(2i/head_dim) for i=0..active_pairs-1
+            auto idx = torch::arange(0, active_pairs, 1, fopts) * 2;  // [0,2,4,...,2*(ap-1)]
+            const double log_theta = std::log(rope_theta);
+            auto inv_freq_active = (idx / static_cast<double>(head_dim) * log_theta).neg().exp();
+
+            // Pad with zeros for nope (no positional encoding) pairs
+            int nope_pairs = head_dim / 2 - active_pairs;
+            torch::Tensor inv_freq;
+            if (nope_pairs > 0)
+            {
+                auto nope = torch::zeros({nope_pairs}, fopts);
+                inv_freq = torch::cat({inv_freq_active, nope}, 0);  // [head_dim/2]
+            }
+            else
+                inv_freq = inv_freq_active;
 
             auto pos_f32 = positions.to(torch::kFloat32);
-            // freqs: [S, rope_dim/2]
-            auto freqs = pos_f32.unsqueeze(-1) * inv_freq.unsqueeze(0);
-            // emb: [S, rope_dim]
-            auto emb = torch::cat({freqs, freqs}, -1);
-
+            auto freqs = pos_f32.unsqueeze(-1) * inv_freq.unsqueeze(0);  // [S, head_dim/2]
+            auto emb = torch::cat({freqs, freqs}, -1);                   // [S, head_dim]
             return { emb.cos(), emb.sin() };
         }
 

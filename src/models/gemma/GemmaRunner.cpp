@@ -352,7 +352,7 @@ namespace mllm
                 : (config_.local_rope_theta > 0.0f
                    ? static_cast<double>(config_.local_rope_theta)
                    : static_cast<double>(config_.rope_theta));
-            // rope_dim: use full head_dim for global (hd=512), rope_dim_local for local (hd=256)
+            // rope_dim: global layers use full hd (512), local use rope_dim_local (256)
             const int layer_rope_dim = global
                 ? static_cast<int>(hd)
                 : (config_.rope_dim_local > 0 ? config_.rope_dim_local : static_cast<int>(hd));
@@ -429,6 +429,8 @@ namespace mllm
 
             hidden = residual + h;
 
+            (void)is_decode;  // used below
+
             // ── FFN sub-block ────────────────────────────────────────────────
             residual = hidden.clone();
             h = GemmaRMSNorm(hidden, lw.post_attention_layernorm, eps);
@@ -450,8 +452,6 @@ namespace mllm
                     lw.per_layer_post_norm, lw.layer_scalar, eps);
             }
 
-            // Debug: print norm of hidden after each layer (first token only)
-            // (removed)
         }
 
         hidden = GemmaRMSNorm(hidden, weights_.at("model.norm.weight"), eps);

@@ -15,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -83,6 +84,10 @@ namespace mllm
         Scheduler&      scheduler;
         ITokenizer&     tokenizer;
         int             port;
+
+        // Watcher futures: owned here so Stop() can wait for them to finish.
+        std::mutex                   watcher_mu;
+        std::vector<std::future<void>> watchers;
 
         Impl(Scheduler& sched, ITokenizer& tok, int p)
             : scheduler(sched), tokenizer(tok), port(p) {}
@@ -219,7 +224,17 @@ namespace mllm
         }
 
         GenerateResult result;
-        try { result = future.get(); }
+        try
+        {
+            if (future.wait_for(std::chrono::seconds(300)) != std::future_status::ready)
+            {
+                res.status = 504;
+                res.set_content(ErrorJson("generation timeout").dump(-1, ' ', true),
+                                "application/json; charset=utf-8");
+                return;
+            }
+            result = future.get();
+        }
         catch (const std::exception& e)
         {
             res.status = 500;
@@ -355,17 +370,33 @@ namespace mllm
                 return;
             }
 
-            // Watcher thread: marks pipe finished after generation completes
-            std::thread([pipe, f = std::move(future)]() mutable {
-                FinishReason fr = FinishReason::EOS;
-                try { fr = f.get().finish_reason; } catch (...) {}
-                {
-                    std::lock_guard<std::mutex> lk(pipe->mu);
-                    pipe->finish_reason = fr;
-                    pipe->finished      = true;
-                }
-                pipe->cv.notify_one();
-            }).detach();
+            // Watcher: waits for generation result and signals the pipe.
+            // Stored in this->watchers so Stop() can join them on shutdown.
+            {
+                auto w = std::async(std::launch::async,
+                    [pipe, gen_fut = std::move(future), self = this]() mutable {
+                        FinishReason fr = FinishReason::EOS;
+                        try { fr = gen_fut.get().finish_reason; } catch (...) {}
+                        {
+                            std::lock_guard<std::mutex> lk(pipe->mu);
+                            pipe->finish_reason = fr;
+                            pipe->finished      = true;
+                        }
+                        pipe->cv.notify_one();
+                        // Prune already-finished watchers from the list.
+                        std::lock_guard<std::mutex> wlk(self->watcher_mu);
+                        auto& v = self->watchers;
+                        v.erase(
+                            std::remove_if(v.begin(), v.end(),
+                                [](const std::future<void>& fv) {
+                                    return fv.wait_for(std::chrono::seconds(0))
+                                           == std::future_status::ready;
+                                }),
+                            v.end());
+                    });
+                std::lock_guard<std::mutex> wlk(watcher_mu);
+                watchers.push_back(std::move(w));
+            }
 
             res.set_chunked_content_provider(
                 "text/event-stream",
@@ -393,9 +424,15 @@ namespace mllm
 
                     {
                         std::unique_lock<std::mutex> lk(pipe->mu);
-                        pipe->cv.wait(lk, [&pipe] {
-                            return !pipe->diffs.empty() || pipe->finished;
-                        });
+                        if (!pipe->cv.wait_for(lk, std::chrono::seconds(300), [&pipe] {
+                                return !pipe->diffs.empty() || pipe->finished;
+                            }))
+                        {
+                            // Timed out waiting for next token — close the stream.
+                            sink.done();
+                            state->done_sent = true;
+                            return false;
+                        }
 
                         if (!pipe->diffs.empty())
                         {
@@ -476,7 +513,17 @@ namespace mllm
         }
 
         GenerateResult result;
-        try { result = future.get(); }
+        try
+        {
+            if (future.wait_for(std::chrono::seconds(300)) != std::future_status::ready)
+            {
+                res.status = 504;
+                res.set_content(ErrorJson("generation timeout").dump(-1, ' ', true),
+                                "application/json; charset=utf-8");
+                return;
+            }
+            result = future.get();
+        }
         catch (const std::exception& e)
         {
             res.status = 500;
@@ -544,5 +591,11 @@ namespace mllm
     void HttpServer::Stop()
     {
         impl_->svr.stop();
+        // Wait for any in-flight watcher futures to finish.
+        std::lock_guard<std::mutex> wlk(impl_->watcher_mu);
+        for (auto& w : impl_->watchers)
+            if (w.valid()) w.wait();
+        impl_->watchers.clear();
     }
+
 }

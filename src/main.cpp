@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 #include <exception>
+#include <atomic>
+#include <csignal>
 
 // Windows SEH exception filter: writes a minidump on crash
 #ifdef _WIN32
@@ -370,9 +372,26 @@ int main(int argc, char* argv[])
         scheduler.Start();
 
         mllm::HttpServer server(scheduler, *bundle.tokenizer, port);
-        server.Run();      // blocks; Ctrl-C is the only exit signal in v1 (no SIGINT handler)
 
-        scheduler.Stop();
+        // Graceful shutdown on SIGINT (Ctrl-C) or SIGTERM.
+        // The flag and pointers are set before Run() so the handler is safe.
+        static std::atomic<bool> g_shutdown{false};
+        static mllm::HttpServer*  g_server    = &server;
+        static mllm::Scheduler*   g_scheduler = &scheduler;
+        auto sighandler = [](int) {
+            if (g_shutdown.exchange(true)) return;  // once only
+            std::cout << "\n[Serve] Shutting down..." << std::endl;
+            g_server->Stop();
+            g_scheduler->Stop();
+        };
+        std::signal(SIGINT,  sighandler);
+        std::signal(SIGTERM, sighandler);
+
+        server.Run();  // blocks until Stop() is called
+
+        // Ensure cleanup if Run() returned without signal (e.g. port conflict).
+        if (!g_shutdown.exchange(true))
+            scheduler.Stop();
         return 0;
     }
 

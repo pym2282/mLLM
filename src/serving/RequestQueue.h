@@ -14,19 +14,19 @@ namespace mllm
     class RequestQueue
     {
     public:
+        explicit RequestQueue(size_t max_size = 64) : max_size_(max_size) {}
+
         void Push(std::shared_ptr<GenerationRequest> req)
         {
             if (!req)
-            {
                 throw std::invalid_argument("RequestQueue cannot push null request.");
-            }
 
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (shutdown_)
-                {
                     throw std::runtime_error("RequestQueue is shut down.");
-                }
+                if (queue_.size() >= max_size_)
+                    throw std::runtime_error("RequestQueue full — server overloaded.");
                 queue_.push(std::move(req));
             }
             cv_.notify_one();
@@ -65,6 +65,7 @@ namespace mllm
         }
 
     private:
+        size_t                                         max_size_;
         std::queue<std::shared_ptr<GenerationRequest>> queue_;
         mutable std::mutex                             mutex_;
         std::condition_variable                        cv_;

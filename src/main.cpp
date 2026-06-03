@@ -350,7 +350,21 @@ int main(int argc, char* argv[])
             return -1;
         }
 
+        // Warmup: trigger lazy GPU transfer BEFORE InitKVCache
+        // so KV caches are allocated on CUDA (not CPU)
+        {
+            std::cout << "[Serve] Warming up (GPU transfer)..." << std::endl;
+            std::vector<int64_t> warmup_ids = { 1 };
+            mllm::GenerateOptions warm_opts;
+            warm_opts.max_new_tokens = 1;
+            try { bundle.runner->Generate(warmup_ids, warm_opts); }
+            catch (...) {}
+            std::cout << "[Serve] Warmup done." << std::endl;
+        }
+
+        // KV cache allocated AFTER GPU transfer → uses CUDA device
         bundle.runner->InitKVCache(1, bundle.runner->GetConfig().max_position_embeddings);
+        std::cout << "[Serve] Ready." << std::endl;
 
         mllm::Scheduler scheduler(*bundle.runner);
         scheduler.Start();

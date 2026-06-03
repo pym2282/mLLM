@@ -37,9 +37,11 @@ namespace mllm
         int max_position_embeddings = 0;
         int intermediate_size = 0;
         int head_dim = 0;
-        int rope_dim = 0;  // partial RoPE: only first rope_dim dims rotated (0 = use head_dim)
+        int rope_dim = 0;       // partial RoPE: global layers (0 = use head_dim)
+        int rope_dim_local = 0; // Gemma 4 SWA layers RoPE dim (0 = use rope_dim)
         float rms_norm_eps = 1e-5f;
         float rope_theta = 10000.0f;
+        float final_logit_softcapping = 0.0f;  // Gemma 4: tanh(x/cap)*cap (0 = disabled)
         float local_rope_theta = 0.0f;  // Gemma 4 local-layer RoPE base (0 = use rope_theta)
         bool tie_word_embeddings = false;
 

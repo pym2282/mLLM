@@ -157,6 +157,8 @@ namespace mllm
                 lw.w_per_layer_proj     = try_get(p + ".per_layer_proj.weight");
                 lw.per_layer_post_norm  = try_get(p + ".per_layer_post_norm.weight");
                 lw.layer_scalar         = try_get(p + ".layer_scalar.weight");
+                if (!lw.layer_scalar.defined())
+                    lw.layer_scalar = try_get(p + ".layer_scalar");  // no .weight suffix variant
             }
 
             layer_weights_.push_back(std::move(lw));
@@ -235,6 +237,14 @@ namespace mllm
     bool GemmaRunner::IsGlobalLayer(int i) const
     {
         if (config_.full_attention_interval <= 0) return true; // all global
+        // Global layers have larger head_dim (derived from K weight shape).
+        // After head_dim override, config_.head_dim = local head_dim (256).
+        // Global layers have kd > local head_dim.
+        if (i < static_cast<int>(layer_weights_.size()) && layer_weights_[i].w_k.defined())
+        {
+            const int kd = static_cast<int>(layer_weights_[i].w_k.size(0)) / config_.num_key_value_heads;
+            return (kd > config_.head_dim);  // global head_dim (512) > local head_dim (256)
+        }
         return ((i + 1) % config_.full_attention_interval == 0);
     }
 
@@ -273,7 +283,7 @@ namespace mllm
         hidden = hidden * std::sqrt(static_cast<double>(config_.hidden_size));
 
         const double eps = config_.rms_norm_eps;
-        const int D_ple = 0; // base model isolation
+        const int D_ple = config_.hidden_size_per_layer_input;  // AltUP per-layer embedding dim
 
         // Gemma 4 Per-Layer Inputs: computed once before layer loop
         // per_layer_inputs[B, S, num_layers * D_ple]
@@ -288,17 +298,17 @@ namespace mllm
             auto model_proj = Linear::Forward(hidden, per_layer_model_proj_);
             model_proj = model_proj * (1.0 / std::sqrt(static_cast<double>(config_.hidden_size)));
 
-            // 3. Apply per_layer_proj_norm (standard RMSNorm, x*w) to projection slices
+            // 3. Apply per_layer_proj_norm (Gemma4RMSNorm: x*(1+w)/rms) to projection slices
             if (per_layer_proj_norm_.defined())
             {
                 const auto dtype = model_proj.scalar_type();
                 auto B2 = model_proj.size(0); auto S2 = model_proj.size(1);
                 auto chunks = model_proj.view({B2, S2, config_.num_layers, D_ple});
+                // GemmaRMSNorm: y = x * (1 + w) / rms(x)
                 auto xf = chunks.to(torch::kFloat32);
                 auto wf = per_layer_proj_norm_.to(torch::kFloat32);
                 auto rms = torch::rsqrt(xf.pow(2).mean(-1, true) + eps);
-                // Standard RMSNorm: x/rms * w (not Gemma (1+w) variant)
-                model_proj = (xf * rms * wf).view({B2, S2, config_.num_layers * D_ple}).to(dtype);
+                model_proj = (xf * rms * (1.0f + wf)).view({B2, S2, config_.num_layers * D_ple}).to(dtype);
             }
 
             // 4. Sum and scale by 1/sqrt(2)
@@ -342,8 +352,10 @@ namespace mllm
                 : (config_.local_rope_theta > 0.0f
                    ? static_cast<double>(config_.local_rope_theta)
                    : static_cast<double>(config_.rope_theta));
-            // rope_dim capped to actual head_dim for this layer
-            const int layer_rope_dim = std::min(static_cast<int>(hd), config_.rope_dim);
+            // rope_dim: use full head_dim for global (hd=512), rope_dim_local for local (hd=256)
+            const int layer_rope_dim = global
+                ? static_cast<int>(hd)
+                : (config_.rope_dim_local > 0 ? config_.rope_dim_local : static_cast<int>(hd));
             auto cs = RoPE::BuildCosSin(position_ids, layer_rope_dim, layer_rope_theta);
             q = RoPE::Apply(q, cs.first, cs.second);
             k = RoPE::Apply(k, cs.first, cs.second);
@@ -385,9 +397,7 @@ namespace mllm
             // Scaled dot-product attention with optional sliding window mask
             torch::Tensor attn_out;
             const int64_t kv_len = k.size(2);
-            // Gemma 4: fixed attention scale = 1/sqrt(query_pre_attn_scalar=256)
-            // ALL layers use this fixed scale regardless of per-layer head_dim
-            // (matches HF: Q *= 1/sqrt(query_pre_attn_scalar), SDPA scale=1.0)
+            // Gemma 4: query_pre_attn_scalar=256 fixed across all layers
             const double kAttnScale = 1.0 / std::sqrt(static_cast<double>(config_.head_dim));
             if (window > 0 && Sq > 1)
             {
@@ -440,7 +450,8 @@ namespace mllm
                     lw.per_layer_post_norm, lw.layer_scalar, eps);
             }
 
-            // layer_scalar disabled for base model test
+            // Debug: print norm of hidden after each layer (first token only)
+            // (removed)
         }
 
         hidden = GemmaRMSNorm(hidden, weights_.at("model.norm.weight"), eps);
@@ -450,8 +461,14 @@ namespace mllm
             : weights_.at("lm_head.weight");
 
         auto logits = Linear::Forward(hidden, lm_w);
-        // Print logit spread (last token only)
-        auto last_logits = logits[0][-1].to(torch::kFloat32);
+
+        // Gemma 4: final logit softcapping
+        if (config_.final_logit_softcapping > 0.0f)
+        {
+            const float cap = config_.final_logit_softcapping;
+            logits = torch::tanh(logits.to(torch::kFloat32) / cap) * cap;
+        }
+
         return logits;
     }
 

@@ -56,7 +56,10 @@ namespace mllm
         auto out = torch::nn::functional::linear(gate, w_proj);
         if (post_norm_w.defined())
             out = GemmaRMSNorm(out, post_norm_w, eps);
-        return hidden + out;  // layer_scalar applied separately in GemmaRunner
+        // layer_scalar scales only the AltUP contribution, not the full residual
+        if (layer_scalar.defined())
+            out = out * layer_scalar.item<float>();
+        return hidden + out;
     }
 
     // Sliding window causal attention bias for prefill.

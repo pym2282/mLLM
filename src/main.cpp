@@ -268,23 +268,31 @@ static int RunParityCheck(
         return -1;
     }
 
-    auto ids = torch::tensor(
-        std::vector<int64_t>{15043, 6796, 263, 1243},
-        torch::kInt64
-    ).unsqueeze(0);
+    // For Gemma: use BOS(2) + turn_marker(106) + "Hi" tokens
+    // For Llama: use the original tokens
+    const std::string mt = bundle.runner->GetModelType();
+    std::vector<int64_t> token_list;
+    if (mt == "gemma")
+        token_list = {2, 106, 2430, 106, 108, 106, 4176, 108};  // <bos><turn|>user\nHi<turn|>\n<turn|>model\n
+    else
+        token_list = {15043, 6796, 263, 1243};
 
-    auto mask = torch::ones({1, 4}, torch::kInt64);
-
+    auto ids = torch::tensor(token_list, torch::kInt64).unsqueeze(0);
+    auto mask = torch::ones({1, (int64_t)token_list.size()}, torch::kInt64);
     auto logits = bundle.runner->Forward(ids, mask);
-    auto last_logits = logits.index({
-        0,
-        logits.size(1) - 1
-    }).to(torch::kFloat32);
+    auto last_logits = logits.index({0, logits.size(1) - 1}).to(torch::kFloat32);
 
-    std::cout
-        << "last-token argmax token_id: "
-        << torch::argmax(last_logits, -1).item<int64_t>()
-        << std::endl;
+    int64_t top_id = torch::argmax(last_logits, -1).item<int64_t>();
+    float   top_val = last_logits[top_id].item<float>();
+    std::cout << "last-token argmax token_id: " << top_id
+              << "  logit=" << top_val << std::endl;
+
+    // Also print top-5
+    auto [topk_vals, topk_ids] = torch::topk(last_logits, 5);
+    std::cout << "top-5: ";
+    for (int i = 0; i < 5; ++i)
+        std::cout << topk_ids[i].item<int64_t>() << "(" << topk_vals[i].item<float>() << ") ";
+    std::cout << std::endl;
 
     return 0;
 }

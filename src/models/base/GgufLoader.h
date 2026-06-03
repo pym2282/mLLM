@@ -579,14 +579,15 @@ private:
                 if (rest == "ffn_up.weight")       return p + ".mlp.up_proj.weight";
                 if (rest == "ffn_down.weight")     return p + ".mlp.down_proj.weight";
                 if (rest == "attn_norm.weight")    return p + ".input_layernorm.weight";
-                if (rest == "ffn_norm.weight")          return p + ".post_attention_layernorm.weight";
-                if (rest == "post_attention_norm.weight") return p + ".post_attn_norm.weight";
-                if (rest == "post_norm.weight")           return p + ".post_attn_norm.weight"; // Gemma 4
-                if (rest == "post_ffw_norm.weight")       return p + ".post_ffn_norm.weight";
+                if (rest == "ffn_norm.weight")               return p + ".post_attention_layernorm.weight";
+                if (rest == "post_attention_norm.weight")    return p + ".post_attn_norm.weight";
+                if (rest == "post_norm.weight")              return p + ".per_layer_post_norm.weight"; // Gemma 4 AltUP post norm [H]
+                if (rest == "post_ffw_norm.weight")          return p + ".post_ffn_norm.weight";
                 // Gemma 4 Per-Layer Input (AltUP)
                 if (rest == "inp_gate.weight")            return p + ".per_layer_inp_gate.weight";
                 if (rest == "proj.weight")                return p + ".per_layer_proj.weight";
                 if (rest == "layer_output_scale.weight")  return p + ".layer_scalar.weight";
+                if (rest == "layer_output_scale")         return p + ".layer_scalar";  // no .weight suffix
 
                 // Qwen3.5 hybrid (Gated DeltaNet) linear-attention layer weights
                 if (rest == "attn_qkv.weight")   return p + ".linear_attn.in_proj_qkv.weight";
@@ -954,7 +955,7 @@ public:
         c.rope_theta          = static_cast<float>(getf("rope.freq_base", 10000.0));
         // Gemma 4: separate local-layer RoPE base (global uses rope_theta above)
         // Try multiple key names used by different converters
-        for (const char* suffix : {"rope.local_freq_base", "rope.freq_base.swa",
+        for (const char* suffix : {"rope.freq_base_swa", "rope.local_freq_base", "rope.freq_base.swa",
                                     "rope.local_base", "rope.swa_freq_base"})
         {
             const std::string k = arch + "." + suffix;
@@ -972,6 +973,8 @@ public:
         // partial RoPE: only first rope_dim dimensions are rotated
         c.rope_dim = geti("rope.dimension_count", 0);
         if (c.rope_dim <= 0) c.rope_dim = c.head_dim;
+        // Gemma 4 SWA layers use a smaller RoPE dim
+        c.rope_dim_local = geti("rope.dimension_count_swa", 0);
 
         // vocab_size from token_embd.weight shape
         // GGUF shape is innermost-first: [hidden_size, vocab_size]
@@ -991,6 +994,9 @@ public:
 
         // Gemma 4: sliding window size (0 = full attention)
         c.sliding_window_size = geti("attention.sliding_window", 0);
+
+        // Gemma 4: final logit softcapping (tanh(x/cap)*cap)
+        c.final_logit_softcapping = static_cast<float>(getf("final_logit_softcapping", 0.0));
 
         // Gemma 4 global attention interval — every N-th layer is full attention
         // Pattern [1,1,1,1,1,0] → interval=6. Same field reused for Qwen3.5 hybrid.

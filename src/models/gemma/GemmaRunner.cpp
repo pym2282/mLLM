@@ -608,12 +608,18 @@ namespace mllm
                 options.temperature, options.top_k, options.top_p,
                 options.use_greedy, current, options.repetition_penalty);
 
-            result.tokens.push_back(next);
-            current.push_back(next);
-
             if (next == options.eos_token_id)
             {
                 result.finish_reason = FinishReason::EOS;
+                break;
+            }
+
+            result.tokens.push_back(next);
+            current.push_back(next);
+
+            if (options.on_token && !options.on_token(next))
+            {
+                result.finish_reason = FinishReason::Stop;
                 break;
             }
 

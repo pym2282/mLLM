@@ -33,5 +33,9 @@ namespace mllm
 
         // streaming: called per token; return false to abort generation
         std::function<bool(int64_t)> on_token;
+
+        // Prefix caching: # prompt tokens whose KV is already loaded.
+        // Runner skips prefill for these tokens and uses existing KV state.
+        int64_t prefix_kv_len = 0;
     };
 }

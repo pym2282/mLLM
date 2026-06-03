@@ -619,7 +619,7 @@ public:
     // cache_path: where to store the cache (*.mlm)
     // ------------------------------------------------------------------
     static constexpr uint32_t CACHE_MAGIC   = 0x4D4C4D43u;
-    static constexpr uint32_t CACHE_VERSION = 2u;
+    static constexpr uint32_t CACHE_VERSION = 3u;  // v3: per-tensor dtype preserved
 
     static bool IsCacheValid(const std::string& gguf_path, const std::string& cache_path)
     {
@@ -742,12 +742,17 @@ public:
             int64_t numel = 1;
             for (auto d : shape) numel *= d;
 
-            if (p + numel * 2 > end) return {};
+            // dtype (1 byte, c10::ScalarType) + raw bytes
+            if (p + 1 > end) return {};
+            const auto dtype    = static_cast<torch::ScalarType>(*p); p += 1;
+            const size_t elt_sz = c10::elementSize(dtype);
+            const size_t nbytes = static_cast<size_t>(numel) * elt_sz;
+            if (p + nbytes > end) return {};
 
-            // mmap 영역을 from_blob으로 직접 참조한 후 clone (zero-copy read)
             auto t = torch::from_blob(
-                const_cast<uint8_t*>(p), shape, torch::kBFloat16).clone();
-            p += numel * 2;
+                const_cast<uint8_t*>(p), shape,
+                torch::TensorOptions().dtype(dtype)).clone();
+            p += nbytes;
 
             out[name] = std::move(t);
 
@@ -796,8 +801,14 @@ public:
             cf.write(reinterpret_cast<char*>(&nd), 4);
             cf.write(reinterpret_cast<const char*>(shape.data()), nd * 8);
 
-            auto t_bf16 = tensor.to(torch::kBFloat16).contiguous();
-            cf.write(reinterpret_cast<char*>(t_bf16.data_ptr()), t_bf16.numel() * 2);
+            // Store dtype + raw bytes (preserves FP8/int8/FP16 as original)
+            auto t_cpu = tensor.cpu().contiguous();
+            const uint8_t dtype_u8 = static_cast<uint8_t>(t_cpu.scalar_type());
+            const size_t  elt_sz   = c10::elementSize(t_cpu.scalar_type());
+            cf.write(reinterpret_cast<const char*>(&dtype_u8), 1);
+            cf.write(static_cast<const char*>(t_cpu.data_ptr()),
+                     static_cast<std::streamsize>(
+                         static_cast<size_t>(t_cpu.numel()) * elt_sz));
         }
 
         if (cf.good())

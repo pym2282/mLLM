@@ -473,9 +473,16 @@ namespace mllm
 
         const bool is_decode = (S == 1) && prefilled_tokens_ > 0;
 
-        // New prefill: clear all caches
-        if (!is_decode)
+        // Prefix caching: consume prefix_kv_len_ on the first prefill call.
+        // If set, KV caches already contain prefix_kv_len_ tokens from SetKVSnapshot.
+        const int64_t prefix_offset = (!is_decode && prefix_kv_len_ > 0)
+                                      ? prefix_kv_len_ : 0;
+        if (prefix_offset > 0)
+            prefix_kv_len_ = 0;  // consume
+
+        if (!is_decode && prefix_offset == 0)
         {
+            // Regular prefill: clear all caches
             for (auto& kvc : kv_caches_)
                 kvc.Clear();
             for (auto& smc : ssm_caches_)
@@ -494,9 +501,10 @@ namespace mllm
         }
         else
         {
+            // Prefill: positions start from prefix_offset (0 normally, >0 with prefix cache)
             position_ids = torch::arange(
-                0,
-                S,
+                prefix_offset,
+                prefix_offset + S,
                 torch::TensorOptions()
                     .dtype(torch::kInt64)
                     .device(target_device)
@@ -648,12 +656,19 @@ namespace mllm
         EnsureOnGPU();  // 첫 호출 시 GPU로 이동 (이후 no-op)
 
         GenerateResult result;
-        std::vector<int64_t> current = input_ids;
 
-        for (auto& cache : kv_caches_)
+        // prefix_kv_len > 0: SetKVSnapshot으로 KV가 이미 로드됨 → prefill 단축
+        const int64_t prefix_len = options.prefix_kv_len;
+
+        if (prefix_len == 0)
         {
-            cache.Clear();
+            // Normal: clear KV caches before prefill
+            for (auto& cache : kv_caches_)
+                cache.Clear();
         }
+        // else: KV caches already set by SetKVSnapshot, don't clear
+
+        std::vector<int64_t> current = input_ids;
 
         std::cout
             << "[QwenRunner] Generating: prompt_len="
@@ -677,18 +692,18 @@ namespace mllm
 
             if (step == 0)
             {
+                // Prefix caching: only process tokens after the cached prefix
+                const auto begin = current.begin() + prefix_len;
                 input_tensor = torch::tensor(
-                    current,
-                    torch::TensorOptions()
-                        .dtype(torch::kInt64)
+                    std::vector<int64_t>(begin, current.end()),
+                    torch::TensorOptions().dtype(torch::kInt64)
                 ).unsqueeze(0);
             }
             else
             {
                 input_tensor = torch::tensor(
                     std::vector<int64_t>{ current.back() },
-                    torch::TensorOptions()
-                        .dtype(torch::kInt64)
+                    torch::TensorOptions().dtype(torch::kInt64)
                 ).unsqueeze(0);
             }
 
@@ -761,6 +776,44 @@ namespace mllm
         }
 
         return result;
+    }
+
+    KVSnapshot QwenRunner::GetKVSnapshot(int64_t len) const
+    {
+        KVSnapshot snap;
+        snap.len = len;
+        snap.keys.reserve(kv_caches_.size());
+        snap.values.reserve(kv_caches_.size());
+        for (const auto& c : kv_caches_)
+        {
+            if (!c.IsInitialized() || c.len < len)
+                return {};
+            snap.keys.push_back(c.key.slice(2, 0, len).cpu().contiguous());
+            snap.values.push_back(c.value.slice(2, 0, len).cpu().contiguous());
+        }
+        return snap;
+    }
+
+    void QwenRunner::SetKVSnapshot(const KVSnapshot& snap)
+    {
+        if (snap.empty()) return;
+        const int64_t len = snap.len;
+        bool any_restored = false;
+        for (int i = 0; i < (int)kv_caches_.size() && i < (int)snap.keys.size(); ++i)
+        {
+            auto& c = kv_caches_[i];
+            if (!c.IsInitialized()) continue;
+            const auto dev = c.key.device();
+            c.key.slice(2, 0, len).copy_(snap.keys[i].to(dev));
+            c.value.slice(2, 0, len).copy_(snap.values[i].to(dev));
+            c.len = len;
+            any_restored = true;
+        }
+        if (any_restored)
+        {
+            prefix_kv_len_    = len;
+            prefilled_tokens_ = static_cast<int>(len);
+        }
     }
 
     void QwenRunner::InitKVCache(

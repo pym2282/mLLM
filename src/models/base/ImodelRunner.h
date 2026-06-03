@@ -12,6 +12,20 @@
 
 namespace mllm
 {
+    // Snapshot of KV cache state for prefix caching.
+    // Keys/values are stored on CPU to allow long-term storage.
+    struct KVSnapshot
+    {
+        std::vector<torch::Tensor> keys;    // [num_layers], each [1, kv_heads, len, head_dim]
+        std::vector<torch::Tensor> values;
+        int64_t len = 0;
+
+        bool empty() const { return len == 0 || keys.empty(); }
+    };
+}
+
+namespace mllm
+{
     struct ModelConfig
     {
         std::string model_name;
@@ -72,6 +86,13 @@ namespace mllm
         virtual GenerateResult Generate(
             const std::vector<int64_t>& input_ids,
             const GenerateOptions& options) = 0;
+
+        // Prefix caching: export KV state for the first `len` tokens (CPU tensors).
+        virtual KVSnapshot GetKVSnapshot(int64_t len) const { return {}; }
+
+        // Restore KV state from a snapshot (GPU transfer happens inside).
+        // Must be called before Generate() when prefix_kv_len > 0.
+        virtual void SetKVSnapshot(const KVSnapshot& snap) { (void)snap; }
 
         // Optional diagnostics path. Production runners should keep this off.
         virtual void SetParityMode(bool enabled)

@@ -44,6 +44,9 @@ namespace mllm
         void SetParityReferenceDir(
             const std::string& path) override;
 
+        KVSnapshot GetKVSnapshot(int64_t len) const override;
+        void SetKVSnapshot(const KVSnapshot& snap) override;
+
     private:
         bool LoadConfig(
             const std::string& config_path);
@@ -103,6 +106,10 @@ namespace mllm
 
         // Total tokens processed since last prefill (0 = no prefill done)
         int prefilled_tokens_ = 0;
+
+        // Prefix caching: # tokens pre-loaded by SetKVSnapshot.
+        // Forward() uses this to start position_ids from here instead of 0.
+        int64_t prefix_kv_len_ = 0;
 
         bool is_loaded_ = false;
         bool parity_mode_ = false;

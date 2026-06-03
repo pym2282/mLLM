@@ -3,18 +3,17 @@
 #pragma once
 
 #include "serving/RequestQueue.h"
+#include "serving/PrefixCache.h"
 #include "models/base/IModelRunner.h"
 #include <thread>
 
 namespace mllm
 {
-    // Sequential request scheduler.
+    // Sequential request scheduler with prefix caching.
     //
-    // Owns a single worker thread that pops requests from RequestQueue
-    // and processes them one at a time via IModelRunner::Generate().
-    //
-    // NOTE: LlamaRunner::Generate() mutates internal kv_caches_.
-    // Only one Generate() may run at a time — never call runner_ concurrently.
+    // Maintains a PrefixCacheManager: after each Generate(), the prompt's
+    // KV state is saved. On the next request with a matching prefix, the
+    // KV state is restored and the runner skips recomputing the cached prefix.
     class Scheduler
     {
     public:
@@ -26,12 +25,16 @@ namespace mllm
 
         RequestQueue& GetQueue();
 
+        // For inspection / testing
+        const PrefixCacheManager& GetPrefixCache() const { return prefix_cache_; }
+
     private:
         void RunLoop();
 
-        IModelRunner& runner_;
-        RequestQueue  queue_;
-        std::thread   worker_;
-        bool          running_ = false;
+        IModelRunner&      runner_;
+        RequestQueue       queue_;
+        PrefixCacheManager prefix_cache_;
+        std::thread        worker_;
+        bool               running_ = false;
     };
 }

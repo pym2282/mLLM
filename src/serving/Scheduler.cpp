@@ -65,17 +65,37 @@ namespace mllm
 
             req->status = RequestStatus::Running;
 
-            std::cerr
-                << "[Scheduler] Processing: "
-                << req->request_id
-                << std::endl;
+            std::cerr << "[Scheduler] Processing: " << req->request_id << "\n";
 
             try
             {
+                // Prefix cache lookup: 기존 KV 재사용 가능한지 확인
+                KVSnapshot cached_snap;
+                const int64_t prefix_hit = prefix_cache_.Lookup(
+                    req->prompt_tokens, cached_snap);
+
+                if (prefix_hit > 0)
+                {
+                    runner_.SetKVSnapshot(cached_snap);
+                    req->options.prefix_kv_len = prefix_hit;
+                    std::cerr << "[Scheduler] Prefix cache hit: " << prefix_hit
+                              << " tokens skipped\n";
+                }
+
                 GenerateResult output = runner_.Generate(
                     req->prompt_tokens,
                     req->options
                 );
+
+                // Generate 완료 후 prompt KV를 캐시에 저장
+                const int64_t prompt_len =
+                    static_cast<int64_t>(req->prompt_tokens.size());
+                if (prompt_len >= PrefixCacheManager::BLOCK_SIZE)
+                {
+                    KVSnapshot snap = runner_.GetKVSnapshot(prompt_len);
+                    if (!snap.empty())
+                        prefix_cache_.Store(req->prompt_tokens, std::move(snap));
+                }
 
                 req->status = RequestStatus::Done;
                 req->result_promise.set_value(std::move(output));
@@ -83,9 +103,7 @@ namespace mllm
             catch (...)
             {
                 req->status = RequestStatus::Failed;
-                req->result_promise.set_exception(
-                    std::current_exception()
-                );
+                req->result_promise.set_exception(std::current_exception());
             }
         }
     }

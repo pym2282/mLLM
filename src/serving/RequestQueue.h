@@ -3,6 +3,7 @@
 #pragma once
 
 #include "serving/GenerationRequest.h"
+#include "core/MllmException.h"
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -24,9 +25,9 @@ namespace mllm
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (shutdown_)
-                    throw std::runtime_error("RequestQueue is shut down.");
+                    throw QueueError("RequestQueue is shut down.");
                 if (queue_.size() >= max_size_)
-                    throw std::runtime_error("RequestQueue full — server overloaded.");
+                    throw QueueError("RequestQueue full — server overloaded.");
                 queue_.push(std::move(req));
             }
             cv_.notify_one();

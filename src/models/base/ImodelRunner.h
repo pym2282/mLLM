@@ -88,10 +88,13 @@ namespace mllm
             const GenerateOptions& options) = 0;
 
         // Prefix caching: export KV state for the first `len` tokens (CPU tensors).
-        virtual KVSnapshot GetKVSnapshot(int64_t len) const { return {}; }
+        // Returns empty snapshot if unsupported or caches not initialized.
+        // Currently implemented: QwenRunner only.
+        virtual KVSnapshot GetKVSnapshot(int64_t len) const { (void)len; return {}; }
 
         // Restore KV state from a snapshot (GPU transfer happens inside).
         // Must be called before Generate() when prefix_kv_len > 0.
+        // No-op if unsupported (safe to call unconditionally).
         virtual void SetKVSnapshot(const KVSnapshot& snap) { (void)snap; }
 
         // Optional diagnostics path. Production runners should keep this off.

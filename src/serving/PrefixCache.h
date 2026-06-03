@@ -7,10 +7,10 @@
 #pragma once
 
 #include "models/base/IModelRunner.h"
+#include "core/Logger.h"
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
-#include <iostream>
 
 namespace mllm
 {
@@ -39,7 +39,7 @@ namespace mllm
                 {
                     it->second.last_used = ++tick_;
                     out_snap = it->second.snap;
-                    std::cerr << "[PrefixCache] HIT len=" << prefix_len << std::endl;
+                    MLLM_INFO("PrefixCache", "HIT len=" + std::to_string(prefix_len));
                     return prefix_len;
                 }
             }
@@ -77,8 +77,8 @@ namespace mllm
             e.last_used = ++tick_;
 
             cache_.emplace(h, std::move(e));
-            std::cerr << "[PrefixCache] STORE len=" << aligned
-                      << " total=" << cache_.size() << std::endl;
+            MLLM_INFO("PrefixCache", "STORE len=" + std::to_string(aligned) +
+                      " total=" + std::to_string(cache_.size() + 1));
         }
 
         size_t Size() const { return cache_.size(); }

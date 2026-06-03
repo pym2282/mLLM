@@ -2,7 +2,8 @@
 
 #include "serving/Scheduler.h"
 #include "models/base/GenerateResult.h"
-#include <iostream>
+#include "core/Logger.h"
+#include "core/MllmException.h"
 #include <c10/cuda/CUDAFunctions.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/torch.h>
@@ -65,7 +66,7 @@ namespace mllm
 
             req->status = RequestStatus::Running;
 
-            std::cerr << "[Scheduler] Processing: " << req->request_id << "\n";
+            MLLM_DEBUG("Scheduler", "Processing: " + req->request_id);
 
             try
             {
@@ -78,8 +79,8 @@ namespace mllm
                 {
                     runner_.SetKVSnapshot(cached_snap);
                     req->options.prefix_kv_len = prefix_hit;
-                    std::cerr << "[Scheduler] Prefix cache hit: " << prefix_hit
-                              << " tokens skipped\n";
+                    MLLM_INFO("Scheduler", "Prefix cache hit: " +
+                              std::to_string(prefix_hit) + " tokens skipped");
                 }
 
                 GenerateResult output = runner_.Generate(
@@ -100,8 +101,21 @@ namespace mllm
                 req->status = RequestStatus::Done;
                 req->result_promise.set_value(std::move(output));
             }
+            catch (const MllmException& e)
+            {
+                MLLM_ERROR("Scheduler", std::string("MllmException: ") + e.what());
+                req->status = RequestStatus::Failed;
+                req->result_promise.set_exception(std::current_exception());
+            }
+            catch (const std::exception& e)
+            {
+                MLLM_ERROR("Scheduler", std::string("exception: ") + e.what());
+                req->status = RequestStatus::Failed;
+                req->result_promise.set_exception(std::current_exception());
+            }
             catch (...)
             {
+                MLLM_ERROR("Scheduler", "unknown exception");
                 req->status = RequestStatus::Failed;
                 req->result_promise.set_exception(std::current_exception());
             }

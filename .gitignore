@@ -37,6 +37,20 @@ test_*.txt
 tok_*.txt
 run_*.txt
 
+# Temp generation/debug files from root
+*.bin
+gemma_in.txt
+gemma_pipe.txt
+gen_err.txt
+gen_out.txt
+hidden_dump_*.bin
+
+# External oracle binaries
+llama_cpp/
+llama_cpp.zip
+llama_err.txt
+llama_out.txt
+
 # OS files
 .DS_Store
 Thumbs.db

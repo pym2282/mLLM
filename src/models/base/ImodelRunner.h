@@ -43,6 +43,8 @@ namespace mllm
         float rope_theta = 10000.0f;
         float final_logit_softcapping = 0.0f;  // Gemma 4: tanh(x/cap)*cap (0 = disabled)
         float local_rope_theta = 0.0f;  // Gemma 4 local-layer RoPE base (0 = use rope_theta)
+        float rope_global_partial_factor = 0.0f;  // Gemma 4 global partial RoPE factor (0.25 → 64 active pairs)
+        int num_shared_kv_layers = 0;  // Gemma 4: last N layers reuse K/V from layer (N_first_local, N_first_global)
         bool tie_word_embeddings = false;
 
         // Sliding window attention (Gemma 4) — 0 means full attention for all layers

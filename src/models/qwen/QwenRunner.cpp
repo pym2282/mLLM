@@ -20,6 +20,7 @@
 #include "debug/TensorCompare.h"
 
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <cuda_runtime.h>
 
 namespace mllm
 {
@@ -554,6 +555,10 @@ namespace mllm
             );
         }
 
+        // MLLM_PROFILE=1: measure dequant vs attention+FFN per decode step
+        static const bool kProfile = (std::getenv("MLLM_PROFILE") != nullptr);
+        float t_dequant_ms = 0.f, t_attn_ms = 0.f;
+
         for (int i = 0; i < config_.num_layers; ++i)
         {
             if (static_cast<int>(layer_is_hybrid_.size()) > i && layer_is_hybrid_[i])
@@ -577,24 +582,59 @@ namespace mllm
 
                 LayerWeights dequant_lw;
                 if (is_fp8)
-                    dequant_lw = DequantizeLayerWeights(layer_weights_[i], hidden.scalar_type());
+                {
+                    if (kProfile && i == 0)
+                    {
+                        cudaEvent_t t0, t1;
+                        cudaEventCreate(&t0); cudaEventCreate(&t1);
+                        cudaEventRecord(t0);
+                        dequant_lw = DequantizeLayerWeights(layer_weights_[i], hidden.scalar_type());
+                        cudaEventRecord(t1); cudaEventSynchronize(t1);
+                        float ms = 0.f; cudaEventElapsedTime(&ms, t0, t1);
+                        t_dequant_ms += ms;
+                        cudaEventDestroy(t0); cudaEventDestroy(t1);
+                    }
+                    else
+                        dequant_lw = DequantizeLayerWeights(layer_weights_[i], hidden.scalar_type());
+                }
 
                 const LayerWeights& lw = is_fp8 ? dequant_lw : layer_weights_[i];
 
-                hidden = TransformerBlock::Forward(
-                    hidden,
-                    lw,
-                    config_.num_attention_heads,
-                    config_.num_key_value_heads,
-                    config_.head_dim,
-                    static_cast<double>(config_.rope_theta),
-                    static_cast<double>(config_.rms_norm_eps),
-                    lw.w_q_norm.defined(),
-                    position_ids,
-                    &kv_caches_[i],
-                    config_.rope_dim
-                );
+                if (kProfile && i == 0)
+                {
+                    cudaEvent_t t0, t1;
+                    cudaEventCreate(&t0); cudaEventCreate(&t1);
+                    cudaEventRecord(t0);
+                    hidden = TransformerBlock::Forward(
+                        hidden, lw,
+                        config_.num_attention_heads, config_.num_key_value_heads,
+                        config_.head_dim, static_cast<double>(config_.rope_theta),
+                        static_cast<double>(config_.rms_norm_eps),
+                        lw.w_q_norm.defined(), position_ids, &kv_caches_[i], config_.rope_dim
+                    );
+                    cudaEventRecord(t1); cudaEventSynchronize(t1);
+                    float ms = 0.f; cudaEventElapsedTime(&ms, t0, t1);
+                    t_attn_ms += ms;
+                    cudaEventDestroy(t0); cudaEventDestroy(t1);
+                }
+                else
+                {
+                    hidden = TransformerBlock::Forward(
+                        hidden, lw,
+                        config_.num_attention_heads, config_.num_key_value_heads,
+                        config_.head_dim, static_cast<double>(config_.rope_theta),
+                        static_cast<double>(config_.rms_norm_eps),
+                        lw.w_q_norm.defined(), position_ids, &kv_caches_[i], config_.rope_dim
+                    );
+                }
             }
+        }
+
+        if (kProfile && is_decode)
+        {
+            std::cerr << "[Profile] decode step"
+                      << " dequant_layer0=" << t_dequant_ms << "ms"
+                      << " attn_layer0=" << t_attn_ms << "ms\n";
         }
 
         prefilled_tokens_ += static_cast<int>(S);

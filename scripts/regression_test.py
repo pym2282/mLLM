@@ -45,7 +45,8 @@ def find_exe(build_dir: Path, exe: Path | None) -> Path:
 
 
 def run_checked(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd))
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", cwd=str(cwd))
     if result.returncode != 0:
         print("===== STDOUT =====")
         print(result.stdout)

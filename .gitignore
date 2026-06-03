@@ -51,6 +51,10 @@ llama_cpp.zip
 llama_err.txt
 llama_out.txt
 
+# Installer build outputs
+installer/*.exe
+installer/*.msi
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -180,21 +180,20 @@ namespace mllm
 
         torch::Tensor position_ids;
 
+        // len>0 works for both dynamic (len set after first write) and
+        // pre-allocated (len=0 after Clear, >0 after first Forward) modes.
         const bool is_decode_step =
             (S == 1) &&
             (!kv_caches_.empty()) &&
-            (kv_caches_[0].IsInitialized());
+            (kv_caches_[0].len > 0);
 
         if (is_decode_step)
         {
-            int64_t cache_len =
-                kv_caches_[0]
-                    .key
-                    .size(2);
-
+            // Use len (not key.size(2)) — pre-allocated tensors are sized to
+            // capacity, not the number of tokens actually written.
             position_ids =
                 torch::tensor(
-                    { cache_len },
+                    { kv_caches_[0].len },
                     torch::TensorOptions()
                         .dtype(torch::kInt64)
                         .device(input_ids.device()));
@@ -367,14 +366,27 @@ namespace mllm
         int batch_size,
         int max_seq_len)
     {
-        // Parameters are hints for future pre-allocation; currently caches
-        // grow dynamically via torch::cat in TransformerBlock.
-        (void)batch_size;
-        (void)max_seq_len;
-
         kv_caches_.clear();
-        kv_caches_.resize(
-            config_.num_layers);
+        kv_caches_.resize(config_.num_layers);
+
+        if (!is_loaded_ || layer_weights_.empty()) return;
+
+        const int64_t alloc_seq = std::min((int64_t)max_seq_len, (int64_t)8192);
+        const auto& ref = weights_.at("model.embed_tokens.weight");
+        const auto device = ref.device();
+        const auto dtype  = ref.scalar_type();
+
+        // KV head dim from w_k shape per layer (authoritative, matches TransformerBlock)
+        const int64_t n_kv = config_.num_key_value_heads;
+
+        for (int i = 0; i < config_.num_layers; ++i)
+        {
+            const int64_t hd_kv_i = layer_weights_[i].w_k.size(0) / n_kv;
+            kv_caches_[i].Allocate(batch_size, n_kv, alloc_seq, hd_kv_i, device, dtype);
+        }
+
+        // NOTE: no Llama model available for regression testing — change is
+        // low-risk since TransformerBlock's capacity>0 path is already exercised by Qwen.
     }
 
     const ModelConfig&

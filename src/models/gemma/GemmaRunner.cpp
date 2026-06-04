@@ -267,7 +267,9 @@ namespace mllm
 
         // Position IDs
         torch::Tensor position_ids;
-        const bool is_decode = (S == 1) && !kv_caches_.empty() && kv_caches_[0].IsInitialized();
+        // Use len>0 (not IsInitialized): pre-allocated caches are always "initialized"
+        // (tensor is defined) but len=0 means no tokens written yet (= prefill, not decode).
+        const bool is_decode = (S == 1) && !kv_caches_.empty() && kv_caches_[0].len > 0;
 
         if (is_decode)
         {
@@ -643,10 +645,31 @@ namespace mllm
 
     void GemmaRunner::InitKVCache(int batch_size, int max_seq_len)
     {
-        (void)batch_size;
-        (void)max_seq_len;
         kv_caches_.clear();
         kv_caches_.resize(config_.num_layers);
+
+        if (!is_loaded_ || layer_weights_.empty()) return;
+
+        const int64_t alloc_seq = std::min((int64_t)max_seq_len, (int64_t)8192);
+        const auto& ref = weights_.at("model.embed_tokens.weight");
+        const auto device = ref.device();
+        const auto dtype  = ref.scalar_type();
+
+        // Shared KV layers (>= kv_share_start) read from store layers — no own cache needed.
+        const int kv_share_start = (config_.num_shared_kv_layers > 0)
+            ? (config_.num_layers - config_.num_shared_kv_layers)
+            : config_.num_layers;
+
+        // Gemma 4 has different head_dim per layer (local vs global use different K projection sizes).
+        // Derive per-layer KV head dim from the actual w_k weight shape, same as Forward() line 420.
+        const int64_t n_kv = config_.num_key_value_heads;
+
+        for (int i = 0; i < kv_share_start; ++i)
+        {
+            const int64_t hd_kv_i = layer_weights_[i].w_k.size(0) / n_kv;
+            kv_caches_[i].Allocate(batch_size, n_kv, alloc_seq, hd_kv_i, device, dtype);
+        }
+        // layers [kv_share_start, num_layers) stay as empty KVCache (capacity=0)
     }
 
     const ModelConfig& GemmaRunner::GetConfig() const { return config_; }

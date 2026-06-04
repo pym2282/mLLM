@@ -288,6 +288,16 @@ static int RunGenerateTest(const std::string& model_path)
         input_ids = bundle.tokenizer->Encode(prompt);
     }
 
+    // Warmup: triggers EnsureOnGPU for lazy-transfer models (QwenRunner) before
+    // InitKVCache so caches are allocated on the correct device (same as serve mode).
+    {
+        mllm::GenerateOptions warm_opts;
+        warm_opts.max_new_tokens = 1;
+        try { bundle.runner->Generate({1}, warm_opts); } catch (...) {}
+    }
+    // Allocate KV cache the same way serve mode does — activates capacity>0 path
+    bundle.runner->InitKVCache(1, bundle.runner->GetConfig().max_position_embeddings);
+
     mllm::GenerateOptions opts;
     opts.max_new_tokens      = 16;
     opts.temperature         = 0.0f;

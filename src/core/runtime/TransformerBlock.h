@@ -213,7 +213,10 @@ namespace mllm
 
             residual = h.clone();
 
-            h = RMSNorm::Forward(h, lw.post_attention_layernorm, rms_norm_eps);
+            // Some models (e.g. single-norm hybrids) share input_layernorm for FFN pre-norm
+            const auto& ffn_norm = lw.post_attention_layernorm.defined()
+                ? lw.post_attention_layernorm : lw.input_layernorm;
+            h = RMSNorm::Forward(h, ffn_norm, rms_norm_eps);
 
             h = MLP::Forward(h, lw.w_gate, lw.w_up, lw.w_down);
 

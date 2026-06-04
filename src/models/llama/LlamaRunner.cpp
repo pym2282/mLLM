@@ -4,6 +4,9 @@
 #include <iostream>
 #include <stdexcept>
 
+#include "core/Logger.h"
+#include "core/MllmException.h"
+
 #include "models/base/GenerateResult.h"
 
 #include "models/base/ModelConfigLoader.h"
@@ -35,20 +38,13 @@ namespace mllm
 
             if (!LoadConfig(config_path))
             {
-                std::cerr
-                    << "[LlamaRunner] Failed to load config: "
-                    << config_path
-                    << std::endl;
+                MLLM_ERROR("LlamaRunner", "Failed to load config: " + config_path);
                 return false;
             }
 
-            if (!SafeTensorHeaderParser::Parse(
-                    model_path,
-                    tensor_map_))
+            if (!SafeTensorHeaderParser::Parse(model_path, tensor_map_))
             {
-                std::cerr
-                    << "[LlamaRunner] Failed to parse safetensors header"
-                    << std::endl;
+                MLLM_ERROR("LlamaRunner", "Failed to parse safetensors header");
                 return false;
             }
 
@@ -59,24 +55,15 @@ namespace mllm
 
             is_loaded_ = true;
 
-            std::cout
-                << "[LlamaRunner] Model loaded successfully\n"
-                << " path   : " << model_path_ << "\n"
-                << " type   : llama\n"
-                << " layers : " << config_.num_layers << "\n"
-                << " weights: " << weights_.size() << "\n"
-                << " kv     : " << kv_caches_.size()
-                << std::endl;
+            MLLM_INFO("LlamaRunner", "Loaded layers=" + std::to_string(config_.num_layers)
+                + " weights=" + std::to_string(weights_.size())
+                + " kv=" + std::to_string(kv_caches_.size()));
 
             return true;
         }
         catch (const std::exception& e)
         {
-            std::cerr
-                << "[LlamaRunner] Load failed:\n"
-                << e.what()
-                << std::endl;
-
+            MLLM_ERROR("LlamaRunner", "Load failed: " + std::string(e.what()));
             is_loaded_ = false;
             return false;
         }
@@ -174,16 +161,9 @@ namespace mllm
             (config_.tie_word_embeddings ? 0 : 1) +
             static_cast<size_t>(config_.num_layers) * 9;
 
-        std::cout
-            << "[LlamaRunner] Loaded all weights: "
-            << weights_.size()
-            << " tensors"
-            << " (layers="
-            << layer_weights_.size()
-            << ", expected="
-            << expected
-            << ")"
-            << std::endl;
+        MLLM_INFO("LlamaRunner", "Loaded " + std::to_string(weights_.size()) + " tensors"
+            + " (layers=" + std::to_string(layer_weights_.size())
+            + ", expected=" + std::to_string(expected) + ")");
     }
 
     torch::Tensor LlamaRunner::Forward(
@@ -192,8 +172,7 @@ namespace mllm
     {
         if (!is_loaded_)
         {
-            throw std::runtime_error(
-                "Model is not loaded.");
+            throw InferenceError("LlamaRunner: model not loaded.");
         }
 
         const auto S =
@@ -286,8 +265,7 @@ namespace mllm
     {
         if (!is_loaded_)
         {
-            throw std::runtime_error(
-                "Model is not loaded.");
+            throw InferenceError("LlamaRunner: model not loaded.");
         }
 
         GenerateResult result;
@@ -361,7 +339,7 @@ namespace mllm
             if (next_token == options.eos_token_id)
             {
                 result.finish_reason = FinishReason::EOS;
-                std::cout << "[LlamaRunner] EOS detected." << std::endl;
+                MLLM_DEBUG("LlamaRunner", "EOS detected");
                 break;
             }
 

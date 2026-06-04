@@ -5,7 +5,11 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
+
+#include "core/Logger.h"
+#include "core/MllmException.h"
 
 #include "models/base/GenerateResult.h"
 #include "models/base/ModelConfigLoader.h"
@@ -37,13 +41,13 @@ namespace mllm
 
             if (!LoadConfig(model_path + "/config.json"))
             {
-                std::cerr << "[GemmaRunner] Failed to load config\n";
+                MLLM_ERROR("GemmaRunner", "Failed to load config");
                 return false;
             }
 
             if (!SafeTensorHeaderParser::Parse(model_path, tensor_map_))
             {
-                std::cerr << "[GemmaRunner] Failed to parse safetensors header\n";
+                MLLM_ERROR("GemmaRunner", "Failed to parse safetensors header");
                 return false;
             }
 
@@ -53,15 +57,13 @@ namespace mllm
             kv_caches_.resize(config_.num_layers);
             is_loaded_ = true;
 
-            std::cout << "[GemmaRunner] Loaded (safetensors)"
-                      << " layers=" << config_.num_layers
-                      << " window=" << config_.sliding_window_size
-                      << "\n";
+            MLLM_INFO("GemmaRunner", "Loaded (safetensors) layers=" + std::to_string(config_.num_layers)
+                + " window=" + std::to_string(config_.sliding_window_size));
             return true;
         }
         catch (const std::exception& e)
         {
-            std::cerr << "[GemmaRunner] Load failed: " << e.what() << "\n";
+            MLLM_ERROR("GemmaRunner", "Load failed: " + std::string(e.what()));
             is_loaded_ = false;
             return false;
         }
@@ -83,9 +85,9 @@ namespace mllm
                 const int derived = q_out / config_.num_attention_heads;
                 if (derived != config_.head_dim)
                 {
-                    std::cerr << "[GemmaRunner] head_dim override: " << config_.head_dim
-                              << " → " << derived
-                              << " (from Q weight shape " << q_out << "/" << config_.num_attention_heads << ")\n";
+                    MLLM_WARN("GemmaRunner", "head_dim override: " + std::to_string(config_.head_dim)
+                        + " → " + std::to_string(derived)
+                        + " (from Q weight shape " + std::to_string(q_out) + "/" + std::to_string(config_.num_attention_heads) + ")");
                     config_.head_dim = derived;
                     // rope_dim cannot exceed head_dim
                     if (config_.rope_dim > config_.head_dim)
@@ -105,11 +107,9 @@ namespace mllm
 
         is_loaded_ = true;
 
-        std::cout << "[GemmaRunner] Loaded (GGUF)"
-                  << " layers=" << config_.num_layers
-                  << " window=" << config_.sliding_window_size
-                  << " global_every=" << config_.full_attention_interval
-                  << "\n";
+        MLLM_INFO("GemmaRunner", "Loaded (GGUF) layers=" + std::to_string(config_.num_layers)
+            + " window=" + std::to_string(config_.sliding_window_size)
+            + " global_every=" + std::to_string(config_.full_attention_interval));
         return true;
     }
 
@@ -188,10 +188,10 @@ namespace mllm
                     per_layer_token_embd_.dim() >= 2 && config_.num_layers > 0)
                     config_.hidden_size_per_layer_input =
                         static_cast<int>(per_layer_token_embd_.size(1)) / config_.num_layers;
-                std::cout << "[GemmaRunner] per_layer_token_embd ["
-                          << per_layer_token_embd_.size(0) << ","
-                          << per_layer_token_embd_.size(1) << "]"
-                          << " D_ple_per_layer=" << config_.hidden_size_per_layer_input << "\n";
+                MLLM_INFO("GemmaRunner", "per_layer_token_embd ["
+                    + std::to_string(per_layer_token_embd_.size(0)) + ","
+                    + std::to_string(per_layer_token_embd_.size(1)) + "]"
+                    + " D_ple_per_layer=" + std::to_string(config_.hidden_size_per_layer_input));
             }
         }
 
@@ -208,7 +208,7 @@ namespace mllm
         // Move to CUDA before building layer_weights_ so all views are CUDA
         if (torch::cuda::is_available())
         {
-            std::cout << "[GemmaRunner] Moving weights to CUDA (async)...\n";
+            MLLM_INFO("GemmaRunner", "Moving weights to CUDA (async)...");
             auto to_cuda = [](torch::Tensor& t) {
                 if (t.defined()) t = t.to(torch::kCUDA, /*non_blocking=*/true);
             };
@@ -223,14 +223,14 @@ namespace mllm
         LoadLayerWeights();  // build layer_weights_ from (now CUDA) weights_
 
         const bool has_altup = (config_.hidden_size_per_layer_input > 0);
-        std::cout << "[GemmaRunner] Loaded " << weights_.size() << " tensors, "
-                  << layer_weights_.size() << " layers"
-                  << (has_altup ? " (AltUP enabled)" : "") << "\n";
+        MLLM_INFO("GemmaRunner", "Loaded " + std::to_string(weights_.size()) + " tensors, "
+            + std::to_string(layer_weights_.size()) + " layers"
+            + (has_altup ? " (AltUP enabled)" : ""));
 
         if (torch::cuda::is_available())
         {
             const auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(0);
-            std::cout << "[GemmaRunner] VRAM=" << stats.reserved_bytes[0].current / (1024*1024) << "MB\n";
+            MLLM_INFO("GemmaRunner", "VRAM=" + std::to_string(stats.reserved_bytes[0].current / (1024*1024)) + "MB");
         }
     }
 
@@ -257,7 +257,7 @@ namespace mllm
         const torch::Tensor& input_ids_cpu,
         const torch::Tensor& /*attention_mask*/)
     {
-        if (!is_loaded_) throw std::runtime_error("GemmaRunner: model not loaded.");
+        if (!is_loaded_) throw InferenceError("GemmaRunner: model not loaded.");
 
         // Move input_ids to the same device as weights
         const auto wdev = weights_.at("model.embed_tokens.weight").device();
@@ -411,7 +411,7 @@ namespace mllm
                 else
                 {
                     // Store layer not yet computed (shouldn't happen in normal order)
-                    throw std::runtime_error("GemmaRunner: shared KV store not populated.");
+                    throw InferenceError("GemmaRunner: shared KV store not populated.");
                 }
             }
             else
@@ -444,7 +444,7 @@ namespace mllm
                     int64_t old_len = cache->len;
                     int64_t new_len = old_len + Sq;
                     if (new_len > cache->capacity)
-                        throw std::runtime_error("GemmaRunner: KV cache overflow.");
+                        throw InferenceError("GemmaRunner: KV cache overflow.");
                     cache->key.slice(2, old_len, new_len).copy_(k);
                     cache->value.slice(2, old_len, new_len).copy_(v);
                     cache->len = new_len;
@@ -512,7 +512,7 @@ namespace mllm
 
             // Dump hidden states for cosine-sim comparison (prefill only, MLLM_DUMP_HIDDEN=1)
             static const bool s_dump = (std::getenv("MLLM_DUMP_HIDDEN") != nullptr);
-            if (i == 0 && !is_decode) std::cerr << "[DUMP] s_dump=" << s_dump << " env=" << (std::getenv("MLLM_DUMP_HIDDEN") ? "SET" : "NULL") << "\n";
+            if (i == 0 && !is_decode) MLLM_DEBUG("GemmaRunner", "s_dump=" + std::to_string(s_dump) + " env=" + (std::getenv("MLLM_DUMP_HIDDEN") ? "SET" : "NULL"));
             if (s_dump && !is_decode) {
                 auto h_f32 = hidden[0][-1].to(torch::kFloat32).contiguous();
                 const float* ptr = h_f32.data_ptr<float>();
@@ -572,7 +572,7 @@ namespace mllm
         const std::vector<int64_t>& input_ids,
         const GenerateOptions& options)
     {
-        if (!is_loaded_) throw std::runtime_error("GemmaRunner: model not loaded.");
+        if (!is_loaded_) throw InferenceError("GemmaRunner: model not loaded.");
 
         GenerateResult result;
         std::vector<int64_t> current = input_ids;
@@ -658,4 +658,5 @@ namespace mllm
         return LoadModelConfigFromJson(config_path, config_);
     }
 }
+
 

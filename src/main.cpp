@@ -62,6 +62,8 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* ep)
 #include "serving/Scheduler.h"
 #include "serving/HttpServer.h"
 #include "serving/GenerationRequest.h"
+#include "core/Logger.h"
+#include "core/MllmException.h"
 
 // Trim history from the front when it exceeds this many tokens.
 constexpr size_t MAX_CONTEXT_TOKENS = 2048;
@@ -132,12 +134,12 @@ static int RunStressTest(
 
     if (!bundle.runner->Load(model_path))
     {
-        std::cerr << "Stress: model load failed." << std::endl;
+        MLLM_ERROR("main", "Stress: model load failed.");
         return -1;
     }
     if (!bundle.tokenizer->Load(model_path))
     {
-        std::cerr << "Stress: tokenizer load failed." << std::endl;
+        MLLM_ERROR("main", "Stress: tokenizer load failed.");
         return -1;
     }
 
@@ -217,7 +219,7 @@ static int RunStressTest(
             }
             catch (const std::exception& e)
             {
-                std::cerr << "[Stress] Turn " << turn << " EXCEPTION: " << e.what() << std::endl;
+                MLLM_ERROR("main", "Stress turn " + std::to_string(turn) + " EXCEPTION: " + e.what());
                 ok = false;
             }
         }
@@ -230,7 +232,7 @@ static int RunStressTest(
             }
             catch (const std::exception& e)
             {
-                std::cerr << "[Stress] Turn " << turn << " EXCEPTION: " << e.what() << std::endl;
+                MLLM_ERROR("main", "Stress turn " + std::to_string(turn) + " EXCEPTION: " + e.what());
                 ok = false;
             }
         }
@@ -253,6 +255,59 @@ static int RunStressTest(
     return 0;
 }
 
+// --generate-test: deterministic multi-token generation for regression testing.
+// Uses temperature=0 (greedy), max_new_tokens=16, model-specific fixed input.
+// Outputs "generate-test tokens: T1 T2 ..." to stdout for golden-record comparison.
+static int RunGenerateTest(const std::string& model_path)
+{
+    auto bundle = mllm::ModelRunnerFactory::Create(model_path);
+
+    if (!bundle.runner->Load(model_path))
+    {
+        MLLM_ERROR("main", "GenerateTest: model load failed.");
+        return -1;
+    }
+    if (!bundle.tokenizer->Load(model_path))
+    {
+        MLLM_ERROR("main", "GenerateTest: tokenizer load failed.");
+        return -1;
+    }
+
+    const std::string mt = bundle.runner->GetModelType();
+    std::vector<int64_t> input_ids;
+    if (mt == "gemma")
+    {
+        // Same fixed tokens used by --parity (verified argmax=4176 against HF BF16)
+        input_ids = {2, 106, 2430, 106, 108, 106, 4176, 108};
+    }
+    else
+    {
+        // Generic: build minimal chat prompt from tokenizer
+        const std::string prompt =
+            bundle.tokenizer->BuildChatPrompt("", "Hello", false);
+        input_ids = bundle.tokenizer->Encode(prompt);
+    }
+
+    mllm::GenerateOptions opts;
+    opts.max_new_tokens      = 16;
+    opts.temperature         = 0.0f;
+    opts.top_k               = 1;
+    opts.use_greedy          = true;
+    opts.repetition_penalty  = 1.0f;  // no penalty: first token must match --parity argmax
+    opts.eos_token_id        = bundle.tokenizer->GetEOSTokenId();
+
+    auto result = bundle.runner->Generate(input_ids, opts);
+
+    std::cout << "generate-test input_len=" << input_ids.size() << "\n";
+    std::cout << "generate-test tokens:";
+    for (auto t : result.tokens)
+        std::cout << ' ' << t;
+    std::cout << '\n';
+    std::cout << "generate-test finish=" << static_cast<int>(result.finish_reason) << '\n';
+
+    return 0;
+}
+
 // --parity: fixed forward pass used by regression_test.py
 static int RunParityCheck(
     const std::string& model_path,
@@ -264,7 +319,7 @@ static int RunParityCheck(
 
     if (!bundle.runner->Load(model_path))
     {
-        std::cerr << "Parity: model load failed." << std::endl;
+        MLLM_ERROR("main", "Parity: model load failed.");
         return -1;
     }
 
@@ -328,6 +383,12 @@ int main(int argc, char* argv[])
         return RunStressTest(model_path, true, true);
 
     // --------------------------------
+    // --generate-test
+    // --------------------------------
+    if (HasFlag(argc, argv, "--generate-test"))
+        return RunGenerateTest(model_path);
+
+    // --------------------------------
     // --parity
     // --------------------------------
     if (HasFlag(argc, argv, "--parity"))
@@ -350,31 +411,31 @@ int main(int argc, char* argv[])
 
         if (!bundle.runner->Load(model_path))
         {
-            std::cerr << "Failed to load model." << std::endl;
+            MLLM_ERROR("main", "Failed to load model.");
             return -1;
         }
 
         if (!bundle.tokenizer->Load(model_path))
         {
-            std::cerr << "Failed to load tokenizer." << std::endl;
+            MLLM_ERROR("main", "Failed to load tokenizer.");
             return -1;
         }
 
         // Warmup: trigger lazy GPU transfer BEFORE InitKVCache
         // so KV caches are allocated on CUDA (not CPU)
         {
-            std::cout << "[Serve] Warming up (GPU transfer)..." << std::endl;
+            MLLM_INFO("main", "[Serve] Warming up (GPU transfer)...");
             std::vector<int64_t> warmup_ids = { 1 };
             mllm::GenerateOptions warm_opts;
             warm_opts.max_new_tokens = 1;
             try { bundle.runner->Generate(warmup_ids, warm_opts); }
             catch (...) {}
-            std::cout << "[Serve] Warmup done." << std::endl;
+            MLLM_INFO("main", "[Serve] Warmup done.");
         }
 
         // KV cache allocated AFTER GPU transfer → uses CUDA device
         bundle.runner->InitKVCache(1, bundle.runner->GetConfig().max_position_embeddings);
-        std::cout << "[Serve] Ready." << std::endl;
+        MLLM_INFO("main", "[Serve] Ready.");
 
         mllm::Scheduler scheduler(*bundle.runner);
         scheduler.Start();
@@ -388,7 +449,7 @@ int main(int argc, char* argv[])
         static mllm::Scheduler*   g_scheduler = &scheduler;
         auto sighandler = [](int) {
             if (g_shutdown.exchange(true)) return;  // once only
-            std::cout << "\n[Serve] Shutting down..." << std::endl;
+            MLLM_INFO("main", "[Serve] Shutting down...");
             g_server->Stop();
             g_scheduler->Stop();
         };
@@ -412,7 +473,7 @@ int main(int argc, char* argv[])
 
         if (!bundle.tokenizer->Load(model_path))
         {
-            std::cerr << "Tokenizer load failed." << std::endl;
+            MLLM_ERROR("main", "Tokenizer load failed.");
             return -1;
         }
 
@@ -438,7 +499,7 @@ int main(int argc, char* argv[])
 
         if (!bundle.tokenizer->Load(model_path))
         {
-            std::cerr << "Tokenizer load failed." << std::endl;
+            MLLM_ERROR("main", "Tokenizer load failed.");
             return -1;
         }
 
@@ -466,13 +527,13 @@ int main(int argc, char* argv[])
 
     if (!bundle.runner->Load(model_path))
     {
-        std::cerr << "Failed to load model." << std::endl;
+        MLLM_ERROR("main", "Failed to load model.");
         return -1;
     }
 
     if (!bundle.tokenizer->Load(model_path))
     {
-        std::cerr << "Failed to load tokenizer." << std::endl;
+        MLLM_ERROR("main", "Failed to load tokenizer.");
         return -1;
     }
 
@@ -593,3 +654,4 @@ int main(int argc, char* argv[])
         return -1;
     }
 }
+

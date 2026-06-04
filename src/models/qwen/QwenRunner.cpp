@@ -5,7 +5,11 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
+
+#include "core/Logger.h"
+#include "core/MllmException.h"
 
 #include "models/base/GenerateResult.h"
 
@@ -40,7 +44,7 @@ namespace mllm
                     layer_is_hybrid_[i] = ((i + 1) % config_.full_attention_interval != 0);
             }
 
-            std::cout << "[QwenRunner] Loading GGUF weights: " << gguf_path << std::endl;
+            MLLM_INFO("QwenRunner", "Loading GGUF weights: " + gguf_path);
             weights_ = GgufLoader::Load(gguf_path);
 
             kv_caches_.clear();
@@ -53,17 +57,14 @@ namespace mllm
 
             is_loaded_ = true;
 
-            std::cout
-                << "[QwenRunner] GGUF model loaded"
-                << " layers=" << config_.num_layers
-                << " weights=" << weights_.size()
-                << std::endl;
+            MLLM_INFO("QwenRunner", "GGUF model loaded layers=" + std::to_string(config_.num_layers)
+                + " weights=" + std::to_string(weights_.size()));
 
             return true;
         }
         catch (const std::exception& e)
         {
-            std::cerr << "[QwenRunner] GGUF load failed:\n" << e.what() << std::endl;
+            MLLM_ERROR("QwenRunner", "GGUF load failed: " + std::string(e.what()));
             is_loaded_ = false;
             return false;
         }
@@ -79,7 +80,7 @@ namespace mllm
             model_path_ = model_path;
             if (!LoadConfig(model_path + "/config.json"))
             {
-                std::cerr << "[QwenRunner] Failed to load config" << std::endl;
+                MLLM_ERROR("QwenRunner", "Failed to load config");
                 return false;
             }
 
@@ -90,7 +91,7 @@ namespace mllm
 
             if (GgufLoader::IsCacheValid(src_key, cache_path))
             {
-                std::cout << "[QwenRunner] Loading from cache..." << std::endl;
+                MLLM_INFO("QwenRunner", "Loading from cache...");
                 auto cached = GgufLoader::LoadCache(cache_path);
                 if (!cached.empty())
                 {
@@ -98,14 +99,14 @@ namespace mllm
                     from_cache = true;
                 }
                 else
-                    std::cerr << "[QwenRunner] Cache corrupt, falling back to safetensors...\n";
+                    MLLM_WARN("QwenRunner", "Cache corrupt, falling back to safetensors...");
             }
 
             if (!from_cache)
             {
                 if (!SafeTensorHeaderParser::Parse(model_path, tensor_map_))
                 {
-                    std::cerr << "[QwenRunner] Failed to parse safetensors header" << std::endl;
+                    MLLM_ERROR("QwenRunner", "Failed to parse safetensors header");
                     return false;
                 }
             }
@@ -125,21 +126,15 @@ namespace mllm
 
             is_loaded_ = true;
 
-            std::cout
-                << "[QwenRunner] Model loaded"
-                << " path=" << model_path_
-                << " layers=" << config_.num_layers
-                << " weights=" << weights_.size()
-                << std::endl;
+            MLLM_INFO("QwenRunner", "Model loaded path=" + model_path_
+                + " layers=" + std::to_string(config_.num_layers)
+                + " weights=" + std::to_string(weights_.size()));
 
             return true;
         }
         catch (const std::exception& e)
         {
-            std::cerr
-                << "[QwenRunner] Load failed:\n"
-                << e.what()
-                << std::endl;
+            MLLM_ERROR("QwenRunner", "Load failed: " + std::string(e.what()));
 
             is_loaded_ = false;
             return false;
@@ -193,16 +188,14 @@ namespace mllm
 
         if (scale.dim() != 2)
         {
-            std::cerr << "[DequantizeFP8] FATAL: scale must be 2D, got ndim="
-                      << scale.dim() << " sizes=" << scale.sizes() << std::endl;
-            throw std::runtime_error("DequantizeFP8: scale must be 2D");
+            MLLM_ERROR("DequantizeFP8", "scale must be 2D, got ndim=" + std::to_string(scale.dim()));
+            throw InferenceError("DequantizeFP8: scale must be 2D");
         }
 
         if (w.size(0) % scale.size(0) != 0 || w.size(1) % scale.size(1) != 0)
         {
-            std::cerr << "[DequantizeFP8] FATAL: dimension mismatch "
-                      << "w=" << w.sizes() << " scale=" << scale.sizes() << std::endl;
-            throw std::runtime_error("DequantizeFP8: dimension mismatch");
+            MLLM_ERROR("DequantizeFP8", "dimension mismatch between w and scale");
+            throw InferenceError("DequantizeFP8: dimension mismatch");
         }
 
         const int64_t block_out = w.size(0) / scale.size(0);
@@ -267,7 +260,7 @@ namespace mllm
             lw.input_layernorm =
                 LoadWeight(p + ".input_layernorm.weight");
             lw.post_attention_layernorm =
-                LoadWeight(p + ".post_attention_layernorm.weight");
+                TryLoadWeight(p + ".post_attention_layernorm.weight");
 
             if (layer_is_hybrid_[i])
             {
@@ -315,16 +308,12 @@ namespace mllm
             layer_weights_.push_back(std::move(lw));
         }
 
-        std::cout
-            << "[QwenRunner] Loaded "
-            << weights_.size()
-            << " tensors"
-            << std::endl;
+        MLLM_INFO("QwenRunner", "Loaded " + std::to_string(weights_.size()) + " tensors");
 
         // 캐시 저장: GPU 전송 전 CPU 텐서 상태에서 저장
         if (!pending_cache_path_.empty())
         {
-            std::cerr << "[QwenRunner] Saving cache to " << pending_cache_path_ << "...\n";
+            MLLM_INFO("QwenRunner", "Saving cache to " + pending_cache_path_);
             GgufLoader::SaveCache(pending_cache_path_, pending_cache_src_, weights_);
             pending_cache_path_.clear();
             pending_cache_src_.clear();
@@ -345,7 +334,7 @@ namespace mllm
                 const std::string p = "model.layers." + std::to_string(i);
                 auto& lw = layer_weights_[i];
                 lw.input_layernorm          = weights_.at(p + ".input_layernorm.weight");
-                lw.post_attention_layernorm = weights_.at(p + ".post_attention_layernorm.weight");
+                lw.post_attention_layernorm = try_get(p + ".post_attention_layernorm.weight");
 
                 if (layer_is_hybrid_[i])
                 {
@@ -386,14 +375,14 @@ namespace mllm
             }
         }
 
-        std::cout << "[QwenRunner] Weights on CPU. GPU transfer deferred to first Generate().\n";
+        MLLM_INFO("QwenRunner", "Weights on CPU. GPU transfer deferred to first Generate().");
     }
 
     void QwenRunner::EnsureOnGPU()
     {
         if (gpu_ready_ || !torch::cuda::is_available()) return;
 
-        std::cout << "[QwenRunner] Moving weights to CUDA (lazy)..." << std::endl;
+        MLLM_INFO("QwenRunner", "Moving weights to CUDA (lazy)...");
         for (auto& [name, w] : weights_)
             w = w.to(torch::kCUDA);
 
@@ -407,7 +396,7 @@ namespace mllm
             const std::string p = "model.layers." + std::to_string(i);
             auto& lw = layer_weights_[i];
             lw.input_layernorm          = weights_.at(p + ".input_layernorm.weight");
-            lw.post_attention_layernorm = weights_.at(p + ".post_attention_layernorm.weight");
+            lw.post_attention_layernorm = try_get(p + ".post_attention_layernorm.weight");
             if (!layer_is_hybrid_[i])
             {
                 lw.w_q = weights_.at(p + ".self_attn.q_proj.weight");
@@ -447,10 +436,8 @@ namespace mllm
 
         c10::cuda::CUDACachingAllocator::emptyCache();
         const auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(0);
-        std::cout << "[QwenRunner] VRAM reserved="
-                  << stats.reserved_bytes[0].current / (1024*1024)
-                  << "MB allocated="
-                  << stats.allocated_bytes[0].current / (1024*1024) << "MB\n";
+        MLLM_INFO("QwenRunner", "VRAM reserved=" + std::to_string(stats.reserved_bytes[0].current / (1024*1024))
+            + "MB allocated=" + std::to_string(stats.allocated_bytes[0].current / (1024*1024)) + "MB");
         gpu_ready_ = true;
     }
 
@@ -460,9 +447,7 @@ namespace mllm
     {
         if (!is_loaded_)
         {
-            throw std::runtime_error(
-                "QwenRunner: model not loaded."
-            );
+            throw InferenceError("QwenRunner: model not loaded.");
         }
 
         torch::NoGradGuard no_grad;
@@ -632,9 +617,8 @@ namespace mllm
 
         if (kProfile && is_decode)
         {
-            std::cerr << "[Profile] decode step"
-                      << " dequant_layer0=" << t_dequant_ms << "ms"
-                      << " attn_layer0=" << t_attn_ms << "ms\n";
+            MLLM_INFO("Profile", "decode step dequant_layer0=" + std::to_string(t_dequant_ms)
+                + "ms attn_layer0=" + std::to_string(t_attn_ms) + "ms");
         }
 
         prefilled_tokens_ += static_cast<int>(S);
@@ -688,9 +672,7 @@ namespace mllm
     {
         if (!is_loaded_)
         {
-            throw std::runtime_error(
-                "QwenRunner: model not loaded."
-            );
+            throw InferenceError("QwenRunner: model not loaded.");
         }
 
         EnsureOnGPU();  // 첫 호출 시 GPU로 이동 (이후 no-op)
@@ -710,14 +692,9 @@ namespace mllm
 
         std::vector<int64_t> current = input_ids;
 
-        std::cout
-            << "[QwenRunner] Generating: prompt_len="
-            << current.size()
-            << " max_new_tokens=" << options.max_new_tokens
-            << " thinking=" << (options.enable_thinking ? "on" : "off")
-            << std::endl;
-        std::cout << "[QwenRunner] Prefill start..." << std::endl;
-        std::cout.flush();
+        MLLM_DEBUG("QwenRunner", "Generating: prompt_len=" + std::to_string(current.size())
+            + " max_new_tokens=" + std::to_string(options.max_new_tokens)
+            + " thinking=" + (options.enable_thinking ? "on" : "off"));
 
         for (int step = 0; step < options.max_new_tokens; ++step)
         {
@@ -771,6 +748,14 @@ namespace mllm
                     options.repetition_penalty
                 );
 
+            // EOS check before push: EOS token must not appear in result.tokens
+            if (next_token == options.eos_token_id)
+            {
+                result.finish_reason = FinishReason::EOS;
+                MLLM_DEBUG("QwenRunner", "EOS detected");
+                break;
+            }
+
             result.tokens.push_back(next_token);
             current.push_back(next_token);
 
@@ -781,22 +766,9 @@ namespace mllm
             }
 
             if (step == 0)
-            {
-                std::cout << "[QwenRunner] Prefill done. First token: " << next_token << std::endl;
-                std::cout.flush();
-            }
+                MLLM_DEBUG("QwenRunner", "Prefill done. First token: " + std::to_string(next_token));
             else if (step % 20 == 0)
-            {
-                std::cout << "[QwenRunner] Decode step " << step << std::endl;
-                std::cout.flush();
-            }
-
-            if (next_token == options.eos_token_id)
-            {
-                result.finish_reason = FinishReason::EOS;
-                std::cout << "[QwenRunner] EOS detected." << std::endl;
-                break;
-            }
+                MLLM_DEBUG("QwenRunner", "Decode step " + std::to_string(step));
 
             bool stop_hit = false;
             for (const auto& stop_seq : options.stop_sequence_ids)
@@ -1088,8 +1060,13 @@ namespace mllm
 
         // ── MLP block ────────────────────────────────────────────────────────
         residual = h;
-        h = RMSNorm::Forward(h, lw.post_attention_layernorm, config_.rms_norm_eps);
+        // Some hybrid-model GGUFs omit ffn_norm; fall back to input_layernorm (shared pre-norm)
+        const auto& ffn_norm = lw.post_attention_layernorm.defined()
+            ? lw.post_attention_layernorm : lw.input_layernorm;
+        h = RMSNorm::Forward(h, ffn_norm, config_.rms_norm_eps);
         h = MLP::Forward(h, lw.w_gate, lw.w_up, lw.w_down);
         return residual + h;
     }
 }
+
+

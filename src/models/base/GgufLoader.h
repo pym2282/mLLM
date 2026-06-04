@@ -23,6 +23,8 @@
 #include <cstring>
 #include <iostream>
 #include <filesystem>
+#include "core/Logger.h"
+#include "core/MllmException.h"
 #include <future>
 #include <thread>
 #ifdef _WIN32
@@ -265,11 +267,11 @@ private:
     static ParseResult Parse(const std::string& path)
     {
         std::ifstream f(path, std::ios::binary);
-        if (!f) throw std::runtime_error("GgufLoader: cannot open " + path);
+        if (!f) throw ::mllm::ModelLoadError("GgufLoader: cannot open " + path);
 
         uint32_t magic = ru32(f);
         if (magic != GGUF_MAGIC)
-            throw std::runtime_error("GgufLoader: not a GGUF file: " + path);
+            throw ::mllm::ModelLoadError("GgufLoader: not a GGUF file: " + path);
 
         ParseResult r;
         r.version         = ru32(f);
@@ -600,7 +602,7 @@ private:
                 if (rest == "ssm_norm.weight")   return p + ".linear_attn.norm.weight";
                 if (rest == "ssm_out.weight")    return p + ".linear_attn.out_proj.weight";
 
-                std::cerr << "[GgufLoader] unmapped blk tensor: " << gguf << "\n";
+                MLLM_DEBUG("GgufLoader", "unmapped blk tensor: " + gguf);
                 return gguf;
             }
         }
@@ -813,7 +815,7 @@ public:
         }
 
         if (cf.good())
-            std::cerr << "[GgufLoader] Cache saved: " << cache_path << "\n";
+            MLLM_INFO("GgufLoader", "Cache saved: " + cache_path);
         else
         {
             cf.close();
@@ -836,16 +838,16 @@ public:
         {
             auto cached = LoadCache(cache_path);
             if (!cached.empty()) return cached;
-            std::cerr << "[GgufLoader] Cache corrupt, regenerating...\n";
+            MLLM_WARN("GgufLoader", "Cache corrupt, regenerating...");
         }
 
         // 2. GGUF 파싱 + 역양자화 (병렬)
         auto pr = Parse(path);
-        std::cerr << "[GgufLoader] GGUF v" << pr.version
-                  << " | " << pr.tensors.size() << " tensors (dequantizing...)\n";
+        MLLM_INFO("GgufLoader", "GGUF v" + std::to_string(pr.version)
+            + " | " + std::to_string(pr.tensors.size()) + " tensors (dequantizing...)");
 
         std::ifstream f(path, std::ios::binary);
-        if (!f) throw std::runtime_error("GgufLoader: cannot reopen " + path);
+        if (!f) throw ::mllm::ModelLoadError("GgufLoader: cannot reopen " + path);
 
         const size_t n = pr.tensors.size();
         const unsigned int n_threads = std::max(1u, std::thread::hardware_concurrency());
@@ -907,10 +909,11 @@ public:
             done += chunk;
             std::cerr << "[GgufLoader] " << std::min(done, n) << "/" << n << "\r";
         }
-        std::cerr << "\n[GgufLoader] Load complete.\n";
+        std::cerr << "\n";
+        MLLM_INFO("GgufLoader", "Load complete.");
 
         // 3. 캐시 저장 (동기 — 다음 실행부터 즉시 히트)
-        std::cerr << "[GgufLoader] Saving cache...\n";
+        MLLM_INFO("GgufLoader", "Saving cache...");
         SaveCache(cache_path, path, out);
 
         return out;
@@ -971,9 +974,9 @@ public:
         }
         // Gemma 4 KV sharing: last N layers reuse K/V from layers (num_layers-N-2) and (num_layers-N-1)
         c.num_shared_kv_layers = geti("attention.shared_kv_layers", 0);
-        std::cerr << "[GgufLoader] local_rope_theta=" << c.local_rope_theta
-                  << " rope_global_partial_factor=" << c.rope_global_partial_factor
-                  << " num_shared_kv_layers=" << c.num_shared_kv_layers << "\n";
+        MLLM_INFO("GgufLoader", "local_rope_theta=" + std::to_string(c.local_rope_theta)
+            + " rope_global_partial_factor=" + std::to_string(c.rope_global_partial_factor)
+            + " num_shared_kv_layers=" + std::to_string(c.num_shared_kv_layers));
         c.max_position_embeddings = geti("context_length", 8192);
 
         // head_dim: prefer explicit key, fall back to hidden/heads
@@ -1031,18 +1034,16 @@ public:
             c.ssm_conv_dim     = 2 * key_dim + c.ssm_inner_size;
         }
 
-        std::cerr << "[GgufLoader] Config:"
-                  << " layers=" << c.num_layers
-                  << " hidden=" << c.hidden_size
-                  << " heads=" << c.num_attention_heads
-                  << " kv_heads=" << c.num_key_value_heads
-                  << " head_dim=" << c.head_dim
-                  << " rope_dim=" << c.rope_dim
-                  << " vocab=" << c.vocab_size
-                  << " rope_theta=" << c.rope_theta
-                  << " rms_eps=" << c.rms_norm_eps
-                  << " tie_emb=" << c.tie_word_embeddings
-                  << "\n";
+        MLLM_INFO("GgufLoader", "Config: layers=" + std::to_string(c.num_layers)
+            + " hidden=" + std::to_string(c.hidden_size)
+            + " heads=" + std::to_string(c.num_attention_heads)
+            + " kv_heads=" + std::to_string(c.num_key_value_heads)
+            + " head_dim=" + std::to_string(c.head_dim)
+            + " rope_dim=" + std::to_string(c.rope_dim)
+            + " vocab=" + std::to_string(c.vocab_size)
+            + " rope_theta=" + std::to_string(c.rope_theta)
+            + " rms_eps=" + std::to_string(c.rms_norm_eps)
+            + " tie_emb=" + std::to_string(c.tie_word_embeddings));
 
         return c;
     }

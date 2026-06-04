@@ -460,6 +460,43 @@ int main(int argc, char* argv[])
 
     try
     {
+    // --------------------------------
+    // --help
+    // --------------------------------
+    if (argc < 2 || HasFlag(argc, argv, "--help") || HasFlag(argc, argv, "-h"))
+    {
+        std::cout <<
+R"(사용법: mLLM.exe [모델경로] [옵션]
+
+모델 경로:
+  .gguf 파일 또는 safetensors 폴더 경로
+  예) models\Qwen3.5-9B-Q4_K_M.gguf
+  예) models\Qwen3-8B-FP16
+
+옵션:
+  --serve           HTTP API 서버 시작 (기본 포트: 8080)
+  --port N          서버 포트 지정 (기본: 8080)
+  --thinking        Qwen3 사고(thinking) 모드 활성화
+  --help, -h        이 도움말 출력
+
+개발자용 옵션:
+  --parity          Forward parity 검증
+  --generate-test   회귀 테스트
+  --prefix-test     Prefix cache 테스트
+  --stress          Scheduler 스트레스 테스트
+  --tokenize        한 줄 입력 토큰화 (stdin)
+  --tokenize-batch  여러 줄 토큰화 (stdin)
+
+예시:
+  mLLM.exe models\Qwen3.5-9B-Q4_K_M.gguf
+  mLLM.exe models\Qwen3.5-9B-Q4_K_M.gguf --serve --port 8080
+  mLLM.exe models\Qwen3.5-9B-Q4_K_M.gguf --thinking
+
+팁: serve 모드에서 http://localhost:8080/v1/chat/completions 로 API 호출 가능
+)";
+        return 0;
+    }
+
     const std::string model_path = ParseModelPath(argc, argv);
 
     // --------------------------------

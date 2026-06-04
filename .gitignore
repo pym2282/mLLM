@@ -2,6 +2,9 @@
 /build/
 /cmake-build-*/
 
+# 사용자별 환경 설정 (configure.ps1 으로 생성)
+local.cmake
+
 # Python virtual environment
 .venv/
 venv/

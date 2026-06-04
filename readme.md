@@ -1,610 +1,195 @@
-# mLLM
+# mLLM — 로컬 AI 채팅 서버
 
-미니 vLLM 스타일의 C++ LLM 추론 런타임.
-
-HuggingFace의 `config.json` + `model.safetensors`를
-**ONNX / TorchScript 없이 직접 로드**하여
-
-* full forward
-* generation
-* KV cache decode
-* tokenizer encode/decode
-* model-specific runtime
-
-를 수행합니다.
-
-목표는 단순 inference demo가 아니라
-
-# "mini-vLLM / mini-llama.cpp 수준의 standalone runtime"
-
-입니다.
-
-즉:
-
-* safetensors 직접 로드
-* full transformer forward
-* sampler
-* KV cache
-* prefill / decode split
-* tokenizer abstraction
-* native tokenizer
-* continuous batching
-* scheduler
-* OpenAI-compatible serving
-
-까지 단계적으로 구현합니다.
+Windows PC에서 AI 모델을 직접 실행하는 C++ LLM 런타임입니다.
+인터넷 없이, 월정액 없이 로컬에서 AI와 대화하거나 API 서버를 띄울 수 있습니다.
 
 ---
 
-# 현재 프로젝트 상태 (매우 중요)
+## 5분 빠른 시작
 
-현재 프로젝트는
+### 0. 준비물 확인
 
-# Core Runtime 완료 + Multi-model 구조 정리 완료
+| 항목 | 필수 | 확인 방법 |
+|------|------|----------|
+| Windows 10/11 | ✅ | |
+| NVIDIA GPU (8GB+ VRAM 권장) | 권장 | 작업 관리자 → 성능 탭 |
+| [CUDA Toolkit 12.x](https://developer.nvidia.com/cuda-downloads) | GPU 사용 시 | `nvcc --version` |
+| [LibTorch (CUDA)](https://pytorch.org/get-started/locally/) | ✅ | 아래 설명 참고 |
+| [Visual Studio 2022](https://visualstudio.microsoft.com/ko/downloads/) (C++ 워크로드) | ✅ | |
+| [CMake 3.20+](https://cmake.org/download/) | ✅ | `cmake --version` |
+| [Python 3.10+](https://www.python.org/downloads/) | ✅ (모델 다운로드) | `python --version` |
 
-상태입니다.
+### 1. LibTorch 설치
 
-즉:
+1. [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) 접속
+2. 아래 설정 선택:
+   - PyTorch Build: **Stable**
+   - OS: **Windows**
+   - Package: **LibTorch**
+   - Language: **C++/Java**
+   - Compute Platform: **CUDA 12.x** (GPU) 또는 **CPU**
+3. 다운로드 링크에서 **Release 버전** zip 다운로드
+4. `C:\libtorch-cuda\` 에 압축 해제 (CUDA) 또는 `C:\libtorch\` (CPU)
 
-* full forward parity 완료
-* generation loop 완료
-* KV cache decode 완료
-* prefill / decode split 완료
-* tokenizer abstraction 완료
-* Qwen3 FP16 parity 완료
-* QwenRunner 분리 완료
-* LlamaRunner / QwenRunner 구조 분리 완료
-* ModelRunnerFactory 자동 분기 완료
+### 2. 환경 설정
 
-까지 끝났습니다.
-
-현재는
-
-# "LLM 구현 중"
-
-이 아니라
-
-# "실사용 가능한 mini-vLLM 엔진 완성 단계"
-
-입니다.
-
-이제 남은 핵심은
-
-# AWQ 지원 + Serving Layer + Continuous Batching
-
-입니다.
-
----
-
-# 기술 스택
-
-## Core
-
-* C++17
-* CMake
-* LibTorch
-* nlohmann/json
-
-## Platform
-
-* Windows
-* MSVC
-* CLion
-
----
-
-# 현재 지원 모델
-
-## Llama Family
-
-* TinyLlama
-* Llama 계열
-* 기본 Llama architecture
-
-## Qwen Family
-
-* Qwen3 FP16
-* Qwen3-8B-FP16 parity 완료
-
-## 다음 목표
-
-* Qwen3-14B-AWQ
-* Qwen3-8B-AWQ
-* GGUF loader (후순위)
-* Mistral
-* Gemma
-
----
-
-# 중요한 설계 원칙
-
----
-
-## 1. Stateless Runtime
-
-위치:
-
-```text
-src/core/runtime/*
+```bat
+setup.bat
 ```
 
-여기는
+이 스크립트가 LibTorch, CUDA, GPU 아키텍처를 자동으로 감지하고 설정합니다.
 
-# 상태 없는 pure function
+### 3. 빌드
 
-만 존재합니다.
-
-예:
-
-* Attention
-* RMSNorm
-* Linear
-* RoPE
-* MLP
-* Sampler
-* TransformerBlock
-
-모델별 구현과 완전히 분리합니다.
-
----
-
-## 2. Model-specific Logic 분리
-
-위치:
-
-```text
-src/models/
+```bat
+build_mllm.bat
 ```
 
-구조:
+첫 빌드는 5~10분 정도 걸립니다.
 
-```text
-IModelRunner
- ├── LlamaRunner
- └── QwenRunner
+### 4. 모델 다운로드
+
+```bat
+pip install huggingface_hub
+python scripts\download_gguf.py
 ```
 
-즉:
+> **추천 모델**: `Qwen3.5-9B-Q4_K_M.gguf` — VRAM 8GB, 한국어/영어 우수
 
-* weight loading
-* layer registry
-* generation loop
-* model-specific config
+### 5. 실행
 
-는 모델별 Runner가 담당합니다.
-
-runtime은 재사용합니다.
-
-이 구조가 매우 중요합니다.
-
----
-
-## 3. Tokenizer Abstraction
-
-위치:
-
-```text
-src/tokenizer/
+**채팅 모드:**
+```bat
+chat.bat
 ```
 
-구조:
-
-```text
-ITokenizer
- ├── BpeTokenizer
- ├── LlamaTokenizer
- └── QwenTokenizer
-```
-
-현재:
-
-* native encode 완료
-* native decode 완료
-* EOS/BOS handling 완료
-* HF parity 확보
-
-즉:
-
-# Python tokenizer 제거 완료
-
-입니다.
-
-목표:
-
-```text
-모델만 있으면 실행 가능
+**API 서버 모드:**
+```bat
+serve.bat
 ```
 
 ---
 
-## 4. Weight Registry Pattern
+## 모델 선택 가이드
 
-구조:
-
-```cpp
-unordered_map<string, Tensor>
-```
-
-원칙:
-
-# HF tensor naming 그대로 유지
-
-즉:
-
-```text
-safetensors key == internal key
-```
-
-rename / remap 하지 않습니다.
-
-이게 유지보수 핵심입니다.
+| 모델 | 파일 크기 | VRAM | 품질 | 속도 | 특징 |
+|------|-----------|------|------|------|------|
+| **Qwen3.5-9B Q4_K_M** ⭐ | 5.7 GB | 8 GB | ★★★★ | ★★★ | 권장, 한국어 우수 |
+| Gemma 4 E2B Q4_K_M | 2.5 GB | 4 GB | ★★★ | ★★★★★ | 빠름, 소형 |
+| Qwen3-8B FP16 | 16 GB | 16 GB | ★★★★★ | ★★ | 최고 품질, VRAM 많이 필요 |
 
 ---
 
-## 5. Regression First
+## 실행 방법
 
-가장 중요한 규칙입니다.
+### 채팅 모드
 
-코드 수정 후 반드시:
+```bat
+chat.bat
+chat.bat models\Qwen3.5-9B-Q4_K_M.gguf
+```
 
+터미널에서 직접 AI와 대화합니다. `q` 입력 후 엔터로 종료.
+
+### API 서버 모드
+
+```bat
+serve.bat
+serve.bat models\Qwen3.5-9B-Q4_K_M.gguf 8080
+```
+
+서버 시작 후 `http://localhost:8080` 에서 OpenAI 호환 API를 사용할 수 있습니다.
+
+**curl 예시:**
 ```bash
-python scripts/regression_test.py
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"messages\": [{\"role\": \"user\", \"content\": \"안녕하세요!\"}]}"
 ```
 
-를 실행합니다.
-
-PASS가 뜨지 않으면
-
-# 다음 작업 금지
-
-입니다.
-
----
-
-# 현재 구현 완료 상태
-
----
-
-## Core Runtime
-
-| 영역                                             | 상태 |
-| ---------------------------------------------- | -- |
-| Config / safetensors 로딩                        | 완료 |
-| sharded safetensors 지원                         | 완료 |
-| BF16 / F16 / F32 tensor decode                 | 완료 |
-| Embedding / RMSNorm                            | 완료 |
-| Attention (GQA + RoPE + causal)                | 완료 |
-| MLP (SwiGLU)                                   | 완료 |
-| Transformer Block                              | 완료 |
-| Full forward parity                            | 완료 |
-| Sampler (greedy / top-k / top-p / temperature) | 완료 |
-| Repetition penalty                             | 완료 |
-| Multi-token generation                         | 완료 |
-| KV cache                                       | 완료 |
-| Prefill / Decode split                         | 완료 |
-| Interactive CLI                                | 완료 |
-| Residual clone (in-place fix)                  | 완료 |
-| Sampler input validation                       | 완료 |
-
----
-
-## Tokenizer
-
-| 영역                       | 상태 |
-| ------------------------ | -- |
-| ITokenizer abstraction   | 완료 |
-| BpeTokenizer             | 완료 |
-| LlamaTokenizer           | 완료 |
-| QwenTokenizer            | 완료 |
-| tokenizer.json load      | 완료 |
-| vocab / merges parse     | 완료 |
-| BOS / EOS handling       | 완료 |
-| Native Encode            | 완료 |
-| Native Decode            | 완료 |
-| Qwen chat template       | 완료 |
-| GPT2 byte decode cleanup | 완료 |
-| Special token handling  | 완료 |
-| HF parity                | 완료 |
-
----
-
-## Qwen Support
-
-| 영역                        | 상태 |
-| ------------------------- | -- |
-| Qwen3 config parse        | 완료 |
-| Qwen3 FP16 load           | 완료 |
-| Qwen3 sharded safetensors | 완료 |
-| QK Norm                   | 완료 |
-| Qwen chat template        | 완료 |
-| Qwen tokenizer            | 완료 |
-| greedy decode parity      | 완료 |
-| generation 정상 동작          | 완료 |
-| QwenRunner 분리             | 완료 |
-
-검증 결과:
-
-```text
-Assistant: Paris.
+**Python 예시:**
+```python
+import requests
+res = requests.post("http://localhost:8080/v1/chat/completions", json={
+    "messages": [{"role": "user", "content": "파이썬으로 hello world 짜줘"}]
+})
+print(res.json()["choices"][0]["message"]["content"])
 ```
 
-정상 출력 완료.
+### CLI 직접 실행
 
-즉:
-
-# Qwen3 FP16 runtime 성공
-
-입니다.
-
----
-
-## Architecture
-
-| 영역                 | 상태 |
-| ------------------ | -- |
-| QwenRunner 분리      | 완료 |
-| LlamaRunner 정리     | 완료 |
-| ModelRunnerFactory | 완료 |
-| config 기반 자동 분기    | 완료 |
-| Parity mode support   | 완료 |
-
-현재:
-
-```cpp
-auto bundle =
-    ModelRunnerFactory::Create(model_path);
-```
-
-만으로
-
-* runner 선택
-* tokenizer 선택
-
-이 자동 처리됩니다.
-
----
-
-# 검증 결과
-
----
-
-## TinyLlama Forward Parity
-
-```text
-C++ argmax == Python argmax
-PASS
+```bat
+cmake-build-release\mLLM.exe --help
+cmake-build-release\mLLM.exe models\Qwen3.5-9B-Q4_K_M.gguf
+cmake-build-release\mLLM.exe models\Qwen3.5-9B-Q4_K_M.gguf --serve --port 8080
+cmake-build-release\mLLM.exe models\Qwen3.5-9B-Q4_K_M.gguf --thinking
 ```
 
 ---
 
-## Qwen3 Forward + Generation
+## API 레퍼런스
 
-```text
-Assistant: Paris.
+### POST /v1/chat/completions (권장)
+
+OpenAI 호환 엔드포인트. ChatGPT API와 동일한 형식입니다.
+
+```json
+{
+  "messages": [
+    {"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다."},
+    {"role": "user",   "content": "질문 내용"}
+  ],
+  "stream": false,
+  "temperature": 0.7,
+  "max_tokens": 512
+}
 ```
 
-검증 완료.
+응답:
+```json
+{
+  "choices": [{"message": {"role": "assistant", "content": "응답 내용"}}],
+  "usage": {"prompt_tokens": 20, "completion_tokens": 50}
+}
+```
 
-즉:
+스트리밍: `"stream": true` 설정 시 Server-Sent Events(SSE)로 토큰을 실시간 수신.
 
-* HF logits parity
-* argmax 일치
-* multi-token generation 정상
-* KV cache decode 정상
-* tokenizer parity 정상
+### GET /health
 
-까지 완료되었습니다.
+서버 상태 확인. `200 OK` 반환.
 
 ---
 
-# 현재 프로젝트 구조
+## 문제 해결
 
-```text
-src/
-├── main.cpp
-│
-├── core/runtime/
-│   ├── EmbeddingLookup.h
-│   ├── RMSNorm.h
-│   ├── Linear.h
-│   ├── RoPE.h
-│   ├── MLP.h
-│   ├── Attention.h
-│   ├── TransformerBlock.h
-│   ├── Sampler.h
-│   ├── Sampler.cpp
-│   └── KVCache.h
-│
-├── tokenizer/
-│   ├── ITokenizer.h
-│   ├── BpeTokenizer.h
-│   ├── LlamaTokenizer.*
-│   ├── QwenTokenizer.*
-│   └── TokenizerJsonLoader.*
-│
-├── models/
-│   ├── base/
-│   │   ├── IModelRunner.h
-│   │   ├── GenerateOptions.h
-│   │   ├── ModelRunnerFactory.h
-│   │   ├── ModelConfigLoader.h
-│   │   ├── SafeTensorHeaderParser.h
-│   │   └── SafeTensorTensorLoader.h
-│   │
-│   ├── llama/
-│   │   ├── LlamaRunner.h
-│   │   └── LlamaRunner.cpp
-│   │
-│   └── qwen/
-│       ├── QwenRunner.h
-│       └── QwenRunner.cpp
-│
-├── serving/
-│   ├── GenerationRequest.h
-│   ├── RequestQueue.h
-│   └── Scheduler.*
-│
-├── debug/
-│   └── TensorCompare.h
-│
-└── scripts/
-    ├── regression_test.py
-    ├── export_qwen3_parity.py
-    ├── verify_full_forward.py
-    └── parity/
-```
+### "DLL을 찾을 수 없습니다" 오류
+→ `chat.bat` 또는 `serve.bat` 사용 (PATH 자동 설정). 직접 실행 시 PATH에 `cmake-build-release\` 추가.
+
+### "CUDA out of memory" 오류
+→ 더 작은 모델 사용 (Q4_K_M GGUF 권장), 다른 GPU 사용 프로그램 종료.
+
+### 모델 파일을 찾을 수 없음
+→ 모델이 `models\` 폴더에 있는지 확인. `chat.bat models\모델파일명.gguf` 처럼 직접 경로 지정.
+
+### 빌드 실패 — "LibTorch를 찾을 수 없습니다"
+→ `setup.bat` 재실행. 또는 `local.cmake` 파일에서 `Torch_DIR` 경로 직접 수정.
+
+### 빌드 실패 — "Visual Studio를 찾을 수 없습니다"
+→ VS 2022 설치 확인. "C++ 데스크톱 개발" 워크로드가 선택되어 있어야 합니다.
 
 ---
 
-# 다음 작업 (매우 중요)
+## 기술 문서
+
+개발자용 아키텍처 설명: [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
 
-# 최우선 작업
+## 지원 모델
 
-# Qwen3-14B-AWQ 지원
-
-현재 가장 중요한 다음 단계입니다.
-
-이유:
-
-FP16은 검증용이고
-
-실사용은
-
-# AWQ
-
-입니다.
-
-목표:
-
-```text
-Qwen3-14B-AWQ
-```
-
-특히 3060 12GB 기준으로
-
-가장 좋은 sweet spot입니다.
-
----
-
-# 구현 순서
-
-```text
-1. AWQ tensor naming 확인
-2. qweight / qzeros / scales / g_idx 로드
-3. dequantize → fp16 parity 확보
-4. 이후 fused int4 matmul 고려
-```
-
-주의:
-
-GGUF는 후순위입니다.
-
-지금은
-
-# AWQ 먼저
-
-입니다.
-
----
-
-# 그 다음
-
-```text
-Continuous batching
-→ Scheduler 고도화
-→ OpenAI-compatible API
-```
-
-즉
-
-# mini-vLLM serving layer
-
-완성 단계입니다.
-
----
-
-# 그 다음
-
-```text
-Streaming output
-→ Server-Sent Events (SSE)
-```
-
----
-
-# 최종 목표
-
-```text
-mini-vLLM 수준의 full-featured runtime
-```
-
----
-
-# 빌드
-
-## Release Build 권장
-
-```bash
-cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build cmake-build-release --config Release
-```
-
----
-
-# 실행 옵션
-
-## 인터랙티브 모드 (기본)
-
-```powershell
-./mLLM.exe models/Qwen3-8B-FP16
-```
-
-## Parity Check 모드
-
-```powershell
-./mLLM.exe models/Qwen3-8B-FP16 --parity --parity-dir scripts/parity
-```
-
-## 배치 토큰화 모드
-
-```powershell
-./mLLM.exe models/Qwen3-8B-FP16 --tokenize-batch < input.txt
-```
-
----
-
-# 파이썬 스크립트 옵션
-
-## verify_full_forward.py
-
-```bash
-python scripts/verify_full_forward.py --model-path models/TinyLlama --dtype bfloat16
-```
-
-옵션:
-
-* `--model-path`: 모델 경로 (기본: models/TinyLlama)
-* `--dtype`: dtype (기본: bfloat16)
-* `--ids`: 입력 토큰 ID (기본: [15043, 6796, 263, 1243])
-
----
-
-# 주의 사항
-
-## Streaming Output는 우선순위 낮음
-
-streaming은 성능 개선이 아니라 UX 개선입니다.
-
-현재 우선순위:
-
-```text
-AWQ → runtime → batching → serving
-```
-
-streaming 최적화는 후순위입니다.
-
----
-
-# 참고
+| 계열 | 모델 | 포맷 |
+|------|------|------|
+| Qwen | Qwen3, Qwen3.5 (8B~) | GGUF, FP16, FP8 |
+| Gemma | Gemma 4 | GGUF, SafeTensors |
+| Llama | TinyLlama, Llama 계열 | SafeTensors |

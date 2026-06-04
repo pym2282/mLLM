@@ -1,0 +1,31 @@
+# local.cmake — 사용자 환경별 경로 설정
+#
+# 사용법:
+#   1. 이 파일을 local.cmake 로 복사
+#   2. 아래 경로를 본인 환경에 맞게 수정
+#   3. configure.ps1 을 실행하면 자동으로 채워집니다
+#
+# local.cmake 는 .gitignore 에 포함되어 있어 커밋되지 않습니다.
+
+# ── LibTorch 경로 ─────────────────────────────────────────────────────────────
+# CUDA 버전: C:/libtorch-cuda/share/cmake/Torch
+# CPU  버전: C:/libtorch/share/cmake/Torch
+set(Torch_DIR "C:/libtorch-cuda/share/cmake/Torch")
+
+# ── CUDA Toolkit 경로 ─────────────────────────────────────────────────────────
+# 예) C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6
+set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6")
+set(CMAKE_CUDA_COMPILER   "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin/nvcc.exe")
+
+# ── MSVC (Visual Studio) 호스트 컴파일러 ──────────────────────────────────────
+# VS 2022 기준 경로. cl.exe 경로를 그대로 붙여넣으세요.
+set(CMAKE_CUDA_HOST_COMPILER
+    "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe")
+
+# ── GPU 아키텍처 (SM 버전) ─────────────────────────────────────────────────────
+# GPU별 값:
+#   RTX 4090 / 4080 / 4070 → 8.9
+#   RTX 3090 / 3080 / 3070 / 3060 → 8.6
+#   RTX 2080 / 2070 / 2060 → 7.5
+#   GTX 1080 / 1070 / 1060 → 6.1
+set(TORCH_CUDA_ARCH_LIST "8.6")

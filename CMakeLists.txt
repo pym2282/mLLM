@@ -5,21 +5,29 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# LibTorch 경로 — CUDA 버전 우선, 없으면 CPU fallback
-if(EXISTS "C:/libtorch-cuda/share/cmake/Torch")
-    set(Torch_DIR "C:/libtorch-cuda/share/cmake/Torch")
-    message(STATUS "Using CUDA LibTorch: C:/libtorch-cuda")
+# ── 사용자 환경 설정 ────────────────────────────────────────────────────────
+# configure.ps1 을 실행하면 local.cmake 가 자동 생성됩니다.
+# 또는 local.cmake.example 을 local.cmake 로 복사 후 직접 수정하세요.
+include(${CMAKE_SOURCE_DIR}/local.cmake OPTIONAL RESULT_VARIABLE _LOCAL_CMAKE)
+if(_LOCAL_CMAKE)
+    message(STATUS "local.cmake 로드됨: ${_LOCAL_CMAKE}")
 else()
-    set(Torch_DIR "C:/libtorch/share/cmake/Torch")
-    message(STATUS "Using CPU LibTorch: C:/libtorch")
+    message(STATUS "local.cmake 없음 — 기본 경로(C:/libtorch-cuda) 사용")
+    message(STATUS "처음 사용자라면 configure.ps1 을 먼저 실행하세요.")
+    # ── 기본값 fallback (local.cmake 없을 때) ──────────────────────────────
+    if(EXISTS "C:/libtorch-cuda/share/cmake/Torch")
+        set(Torch_DIR "C:/libtorch-cuda/share/cmake/Torch")
+        message(STATUS "Using CUDA LibTorch: C:/libtorch-cuda")
+    else()
+        set(Torch_DIR "C:/libtorch/share/cmake/Torch")
+        message(STATUS "Using CPU LibTorch: C:/libtorch")
+    endif()
+    set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6")
+    set(CMAKE_CUDA_COMPILER   "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin/nvcc.exe")
+    set(CMAKE_CUDA_HOST_COMPILER
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe")
+    set(TORCH_CUDA_ARCH_LIST "8.6")
 endif()
-
-set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6")
-set(CMAKE_CUDA_COMPILER "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin/nvcc.exe")
-# CUDA 12.6 supports MSVC up to 2022; use VS2022 cl.exe as nvcc host compiler
-set(CMAKE_CUDA_HOST_COMPILER "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe")
-# RTX 3060 = sm_86; skip auto-detection (try_run fails with unsupported MSVC)
-set(TORCH_CUDA_ARCH_LIST "8.6")
 find_package(Torch REQUIRED)
 
 add_executable(mLLM

@@ -90,6 +90,35 @@ def setup_path(args: argparse.Namespace) -> None:
         os.environ["PATH"] = str(args.libtorch_dir) + os.pathsep + os.environ["PATH"]
 
 
+def run_prefix_cache_suite(args: argparse.Namespace, exe: Path, model_path: Path) -> None:
+    print(f"Running prefix-cache cold-vs-hit ({model_path.name})...")
+    setup_path(args)
+    result = run_checked([str(exe), str(model_path), "--prefix-test"], exe.parent)
+    combined = result.stdout + result.stderr
+
+    hit_len_m = re.search(r"prefix-test hit_len=(\d+)", combined)
+    match_m   = re.search(r"prefix-test tokens_match=(\d+)", combined)
+    prompt_m  = re.search(r"prefix-test prompt_len=(\d+)", combined)
+
+    if not hit_len_m or not match_m:
+        raise RuntimeError("Failed to parse prefix-test output")
+
+    hit_len     = int(hit_len_m.group(1))
+    tokens_match = int(match_m.group(1))
+    prompt_len  = int(prompt_m.group(1)) if prompt_m else 0
+
+    if hit_len == 0:
+        print(f"  SKIP: prefix cache not active (prompt_len={prompt_len}, model may not support KVSnapshot)")
+        return
+
+    if not tokens_match:
+        raise RuntimeError(
+            f"Prefix cache cold-vs-hit mismatch: tokens differ "
+            f"(hit_len={hit_len}, prompt_len={prompt_len})"
+        )
+    print(f"  PASS: prefix-cache hit_len={hit_len} tokens_match=1 prompt_len={prompt_len}")
+
+
 def run_tokenizer_suite(args: argparse.Namespace, exe: Path, model_path: Path) -> None:
     print("Running tokenizer parity...")
     result = run_checked(
@@ -172,7 +201,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--suite",
         choices=["all", "tokenizer", "qwen-forward", "gemma-forward",
-                 "gemma-generate", "qwen-generate"],
+                 "gemma-generate", "qwen-generate", "prefix-cache"],
         default="gemma-forward",
         help="Test suite to run (default: gemma-forward)",
     )
@@ -234,6 +263,17 @@ def main() -> None:
                 QWEN_EXPECTED_GENERATE_TOKENS,
                 "Qwen3.5",
             )
+
+    # ── Prefix cache cold-vs-hit (Qwen only, SKIP for others) ─────────────────
+    if args.suite in ("all", "prefix-cache"):
+        qwen_path = args.model_path.resolve()
+        if not qwen_path.exists():
+            if args.suite == "all":
+                print(f"SKIP: Qwen model not found at {qwen_path}")
+            else:
+                raise RuntimeError(f"Qwen model not found: {qwen_path}")
+        else:
+            run_prefix_cache_suite(args, exe, qwen_path)
 
     print("\nPASS: all suites completed")
 

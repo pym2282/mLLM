@@ -548,16 +548,12 @@ namespace mllm
         {
             if (static_cast<int>(layer_is_hybrid_.size()) > i && layer_is_hybrid_[i])
             {
-#if 0  // ISOLATION TEST: HYBRID pass-through — remove before ship
-                (void)ssm_caches_[i];
-#else
                 hidden = ForwardHybridLayer(
                     hidden,
                     linear_attn_weights_[i],
                     layer_weights_[i],
                     &ssm_caches_[i]
                 );
-#endif
             }
             else
             {

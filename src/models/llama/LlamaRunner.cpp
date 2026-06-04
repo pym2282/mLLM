@@ -332,15 +332,16 @@ namespace mllm
                     current,
                     options.repetition_penalty);
 
-            result.tokens.push_back(next_token);
-            current.push_back(next_token);
-
+            // EOS check before push: EOS token must not appear in result.tokens
             if (next_token == options.eos_token_id)
             {
                 result.finish_reason = FinishReason::EOS;
                 MLLM_DEBUG("LlamaRunner", "EOS detected");
                 break;
             }
+
+            result.tokens.push_back(next_token);
+            current.push_back(next_token);
 
             bool stop_hit = false;
             for (const auto& stop_seq : options.stop_sequence_ids)

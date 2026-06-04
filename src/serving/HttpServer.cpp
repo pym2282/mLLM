@@ -10,6 +10,7 @@
 #include "models/base/GenerateResult.h"
 
 #include <nlohmann/json.hpp>
+#include "core/Logger.h"
 
 #include <atomic>
 #include <chrono>
@@ -237,8 +238,10 @@ namespace mllm
         }
         catch (const std::exception& e)
         {
+            MLLM_ERROR("HttpServer", "generate error: " + std::string(e.what()));
             res.status = 500;
-            res.set_content(ErrorJson(e.what()).dump(-1, ' ', true), "application/json; charset=utf-8");
+            res.set_content(ErrorJson("internal server error").dump(-1, ' ', true),
+                            "application/json; charset=utf-8");
             return;
         }
 

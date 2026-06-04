@@ -17,6 +17,7 @@
 #include "models/base/SafeTensorTensorLoader.h"
 #include "models/base/GgufLoader.h"
 #include "models/base/GenerateOptions.h"
+#include "models/base/BaseModelRunner.h"
 
 #include "core/runtime/EmbeddingLookup.h"
 #include "core/runtime/Sampler.h"
@@ -113,15 +114,6 @@ namespace mllm
         return true;
     }
 
-    torch::Tensor& GemmaRunner::LoadWeight(const std::string& name)
-    {
-        auto it = weights_.find(name);
-        if (it != weights_.end()) return it->second;
-
-        auto t = SafeTensorTensorLoader::LoadTensor(model_path_, name, tensor_map_);
-        auto [ins, _] = weights_.emplace(name, std::move(t));
-        return ins->second;
-    }
 
     void GemmaRunner::LoadLayerWeights()
     {
@@ -671,8 +663,6 @@ namespace mllm
         }
         // layers [kv_share_start, num_layers) stay as empty KVCache (capacity=0)
     }
-
-    const ModelConfig& GemmaRunner::GetConfig() const { return config_; }
 
     std::string GemmaRunner::GetModelType() const { return "gemma"; }
 

@@ -141,30 +141,6 @@ namespace mllm
         }
     }
 
-    torch::Tensor& QwenRunner::LoadWeight(const std::string& name)
-    {
-        auto it = weights_.find(name);
-
-        if (it != weights_.end())
-        {
-            return it->second;
-        }
-
-        auto tensor = SafeTensorTensorLoader::LoadTensor(
-            model_path_,
-            name,
-            tensor_map_
-        );
-
-        auto [ins, ok] = weights_.emplace(
-            name,
-            std::move(tensor)
-        );
-
-        (void)ok;
-        return ins->second;
-    }
-
     torch::Tensor QwenRunner::TryLoadWeight(const std::string& name)
     {
         // Check pre-loaded cache first (covers GGUF path)
@@ -869,11 +845,6 @@ namespace mllm
                 );
             }
         }
-    }
-
-    const ModelConfig& QwenRunner::GetConfig() const
-    {
-        return config_;
     }
 
     std::string QwenRunner::GetModelType() const

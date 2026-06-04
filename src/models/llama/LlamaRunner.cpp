@@ -22,11 +22,6 @@
 
 namespace mllm
 {
-    LlamaRunner::LlamaRunner()
-        : is_loaded_(false)
-    {
-    }
-
     bool LlamaRunner::Load(const std::string& model_path)
     {
         try
@@ -69,31 +64,6 @@ namespace mllm
         }
     }
 
-    torch::Tensor& LlamaRunner::LoadWeight(
-        const std::string& name)
-    {
-        auto existing = weights_.find(name);
-
-        if (existing != weights_.end())
-        {
-            return existing->second;
-        }
-
-        auto tensor =
-            SafeTensorTensorLoader::LoadTensor(
-                model_path_,
-                name,
-                tensor_map_);
-
-        auto [it, inserted] =
-            weights_.emplace(
-                name,
-                std::move(tensor));
-
-        (void)inserted;
-
-        return it->second;
-    }
 
     void LlamaRunner::LoadAllWeights()
     {
@@ -388,12 +358,6 @@ namespace mllm
 
         // NOTE: no Llama model available for regression testing — change is
         // low-risk since TransformerBlock's capacity>0 path is already exercised by Qwen.
-    }
-
-    const ModelConfig&
-    LlamaRunner::GetConfig() const
-    {
-        return config_;
     }
 
     std::string

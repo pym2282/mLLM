@@ -721,42 +721,13 @@ namespace mllm
                 );
 
             // EOS check before push: EOS token must not appear in result.tokens
-            if (next_token == options.eos_token_id)
-            {
-                result.finish_reason = FinishReason::EOS;
-                MLLM_DEBUG("QwenRunner", "EOS detected");
-                break;
-            }
-
-            result.tokens.push_back(next_token);
-            current.push_back(next_token);
-
-            if (options.on_token && !options.on_token(next_token))
-            {
-                result.finish_reason = FinishReason::Stop;
-                break;
-            }
-
             if (step == 0)
                 MLLM_DEBUG("QwenRunner", "Prefill done. First token: " + std::to_string(next_token));
             else if (step % 20 == 0)
                 MLLM_DEBUG("QwenRunner", "Decode step " + std::to_string(step));
 
-            bool stop_hit = false;
-            for (const auto& stop_seq : options.stop_sequence_ids)
-            {
-                if (stop_seq.empty()) continue;
-                const size_t n = stop_seq.size();
-                if (current.size() >= n &&
-                    std::equal(stop_seq.begin(), stop_seq.end(),
-                               current.end() - static_cast<ptrdiff_t>(n)))
-                {
-                    result.finish_reason = FinishReason::Stop;
-                    stop_hit = true;
-                    break;
-                }
-            }
-            if (stop_hit) break;
+            if (AppendTokenOrStop(result, current, next_token, options))
+                break;
         }
 
         return result;

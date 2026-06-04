@@ -302,32 +302,8 @@ namespace mllm
                     current,
                     options.repetition_penalty);
 
-            // EOS check before push: EOS token must not appear in result.tokens
-            if (next_token == options.eos_token_id)
-            {
-                result.finish_reason = FinishReason::EOS;
-                MLLM_DEBUG("LlamaRunner", "EOS detected");
+            if (AppendTokenOrStop(result, current, next_token, options))
                 break;
-            }
-
-            result.tokens.push_back(next_token);
-            current.push_back(next_token);
-
-            bool stop_hit = false;
-            for (const auto& stop_seq : options.stop_sequence_ids)
-            {
-                if (stop_seq.empty()) continue;
-                const size_t n = stop_seq.size();
-                if (current.size() >= n &&
-                    std::equal(stop_seq.begin(), stop_seq.end(),
-                               current.end() - static_cast<ptrdiff_t>(n)))
-                {
-                    result.finish_reason = FinishReason::Stop;
-                    stop_hit = true;
-                    break;
-                }
-            }
-            if (stop_hit) break;
         }
 
         return result;

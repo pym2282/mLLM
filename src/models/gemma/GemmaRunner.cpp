@@ -602,36 +602,10 @@ namespace mllm
                 options.temperature, options.top_k, options.top_p,
                 options.use_greedy, current, options.repetition_penalty);
 
-            if (next == options.eos_token_id)
-            {
-                result.finish_reason = FinishReason::EOS;
+            if (AppendTokenOrStop(result, current, next, options))
                 break;
-            }
-
-            result.tokens.push_back(next);
-            current.push_back(next);
-
-            if (options.on_token && !options.on_token(next))
-            {
-                result.finish_reason = FinishReason::Stop;
-                break;
-            }
-
-            for (const auto& stop : options.stop_sequence_ids)
-            {
-                if (stop.empty()) continue;
-                const size_t n = stop.size();
-                if (current.size() >= n &&
-                    std::equal(stop.begin(), stop.end(),
-                               current.end() - static_cast<ptrdiff_t>(n)))
-                {
-                    result.finish_reason = FinishReason::Stop;
-                    goto done;
-                }
-            }
         }
 
-    done:
         return result;
     }
 

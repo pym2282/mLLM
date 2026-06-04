@@ -53,5 +53,48 @@ namespace mllm
             auto [ins, _] = weights_.emplace(name, std::move(t));
             return ins->second;
         }
+
+        // Post-sample step for Generate loops.
+        // Handles the invariant shared across all runners:
+        //   1. EOS check BEFORE push (EOS token never appears in result.tokens)
+        //   2. push to result.tokens and current
+        //   3. on_token streaming callback
+        //   4. stop_sequence matching
+        // Returns true when the caller's generate loop should break.
+        static bool AppendTokenOrStop(
+            GenerateResult&             result,
+            std::vector<int64_t>&       current,
+            int64_t                     next,
+            const GenerateOptions&      opts)
+        {
+            if (next == opts.eos_token_id)
+            {
+                result.finish_reason = FinishReason::EOS;
+                return true;
+            }
+
+            result.tokens.push_back(next);
+            current.push_back(next);
+
+            if (opts.on_token && !opts.on_token(next))
+            {
+                result.finish_reason = FinishReason::Stop;
+                return true;
+            }
+
+            for (const auto& stop : opts.stop_sequence_ids)
+            {
+                if (stop.empty()) continue;
+                const size_t n = stop.size();
+                if (current.size() >= n &&
+                    std::equal(stop.begin(), stop.end(),
+                               current.end() - static_cast<ptrdiff_t>(n)))
+                {
+                    result.finish_reason = FinishReason::Stop;
+                    return true;
+                }
+            }
+            return false;
+        }
     };
 }
